@@ -470,9 +470,14 @@ async function fileToBase64(file) {
 // GEMINI AI API poziv
 // ---------------------------------------------------------
 async function callGeminiVision(file, promptText) {
-  if (!state.geminiApiKey) {
-    throw new Error("API ključ nije unesen! Unesi Google Gemini API ključ u Postavkama.");
+  // Prvo provjeri input u postavkama, pa onda stanje (state)
+  const apiKeyInput = document.getElementById("geminiApiKey");
+  const apiKey = (apiKeyInput ? apiKeyInput.value.trim() : "") || state.geminiApiKey;
+
+  if (!apiKey) {
+    throw new Error("API ključ nije unesen! Unesi Google Gemini API ključ u kartici Postavke.");
   }
+  
   const base64Data = await fileToBase64(file);
   
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
@@ -491,6 +496,9 @@ async function callGeminiVision(file, promptText) {
   const data = await response.json();
   if (data.error) {
     throw new Error(data.error.message);
+  }
+  if (!data.candidates || !data.candidates[0].content) {
+    throw new Error("Gemini nije vratio ispravan odgovor.");
   }
   return data.candidates[0].content.parts[0].text;
 }
