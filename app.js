@@ -1,12 +1,10 @@
 /* ===========================================================
-   Carp Diem — Clan War Tracker
+   Carp Diem — Clan War Tracker (Gemini AI Vision OCR)
    Static, client-side (GitHub Pages friendly).
-   All data lives in localStorage. Images are OCR'd in-browser
-   with Tesseract.js as a best-effort autofill; user always
-   reviews/edits before saving.
+   All data lives in localStorage. Images are processed via Gemini AI.
 =========================================================== */
 
-const STORAGE_KEY = "cd_tracker_v1";
+const STORAGE_KEY = "cd_tracker_v2";
 const HR_MONTHS = ["Siječanj","Veljača","Ožujak","Travanj","Svibanj","Lipanj",
                     "Srpanj","Kolovoz","Rujan","Listopad","Studeni","Prosinac"];
 const HR_DAYLABELS = ["Pon","Uto","Sri","Čet","Pet","Sub","Ned"];
@@ -19,7 +17,7 @@ function loadData(){
     const raw = localStorage.getItem(STORAGE_KEY);
     if(raw) return JSON.parse(raw);
   }catch(e){ console.warn("Could not parse stored data", e); }
-  return { ourClanName: "Carp Diem", players: [], fights: {} };
+  return { ourClanName: "Carp Diem", geminiApiKey: "", players: [], fights: {} };
 }
 function saveData(){
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -83,7 +81,6 @@ function renderCalendar(){
   });
 
   const firstDay = new Date(calYear, calMonth, 1);
-  // JS getDay: 0=Sun..6=Sat -> convert to Mon-first index
   let startOffset = firstDay.getDay() - 1;
   if(startOffset < 0) startOffset = 6;
   const daysInMonth = new Date(calYear, calMonth+1, 0).getDate();
@@ -126,7 +123,6 @@ function renderCalendar(){
     cell.addEventListener("click", ()=> openEditor(calYear, calMonth, d));
     grid.appendChild(cell);
   }
-  renderCalendar._done = true;
 }
 
 function computeResult(fight){
@@ -158,8 +154,8 @@ function renderTables(){
   container.innerHTML = "";
 
   const daysInMonth = new Date(tableYear, tableMonth+1, 0).getDate();
-  const half1 = []; // days 1-14
-  const half2 = []; // days 15-end
+  const half1 = []; 
+  const half2 = []; 
   for(let d=1; d<=daysInMonth; d++){
     const key = dateKey(tableYear, tableMonth, d);
     if(!state.fights[key]) continue;
@@ -191,10 +187,9 @@ function buildTableBlock(container, title, days){
   const dayKeys = days.map(d => dateKey(tableYear, tableMonth, d));
   const fights = dayKeys.map(k => state.fights[k]);
 
-  // Row: result badge
   const rowResult = document.createElement("tr");
   rowResult.className = "row-result";
-  rowResult.appendChild(cornerCell(title.split(" ")[0]+" ..."));
+  rowResult.appendChild(cornerCell(""));
   fights.forEach((f,i)=>{
     const res = computeResult(f);
     const td = document.createElement("td");
@@ -208,24 +203,17 @@ function buildTableBlock(container, title, days){
   });
   table.appendChild(rowResult);
 
-  // Row: our standing before
   appendPlainRow(table, "row-ourstanding", "", fights.map(f=> fmtStanding(f.ourTrophies,f.ourPosition,f.ourLeague)));
-  // Row: date
   appendPlainRow(table, "row-date", "", days.map(d=> formatShortDate(tableYear,tableMonth,d)));
-  // Row: opponent name
   appendPlainRow(table, "row-oppname", "", fights.map(f=> f.opponentName || ""));
-  // Row: opponent standing before
   appendPlainRow(table, "row-oppstanding", "", fights.map(f=> fmtStanding(f.oppTrophies,f.oppPosition,f.oppLeague)));
-  // Row: final score
   appendPlainRow(table, "row-score", "", fights.map(f=>{
     if(f.ourFinalScore==null || f.ourFinalScore==="" ) return "";
     return `${f.ourFinalScore}--${f.theirFinalScore}`;
   }));
 
-  // Player rows
   const sortedPlayers = [...state.players].sort((a,b)=> a.localeCompare(b));
   sortedPlayers.forEach(player=>{
-    // find first date (overall, not just this block) this player appears
     const firstAppearance = findFirstAppearance(player);
     const tr = document.createElement("tr");
     const nameTd = document.createElement("td");
@@ -236,7 +224,7 @@ function buildTableBlock(container, title, days){
       const td = document.createElement("td");
       const key = dayKeys[i];
       if(firstAppearance && key < firstAppearance){
-        td.textContent = ""; // not a member yet
+        td.textContent = ""; 
       } else if(f.playerRanks && Object.prototype.hasOwnProperty.call(f.playerRanks, player)){
         td.textContent = f.playerRanks[player];
       } else {
@@ -254,7 +242,7 @@ function buildTableBlock(container, title, days){
 function cornerCell(text){
   const th = document.createElement("th");
   th.className = "corner";
-  th.textContent = "";
+  th.textContent = text;
   return th;
 }
 function appendPlainRow(table, cls, firstLabel, values){
@@ -325,16 +313,21 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
 // SETTINGS
 // ---------------------------------------------------------
 document.getElementById("ourClanName").value = state.ourClanName || "Carp Diem";
+const apiKeyInput = document.getElementById("geminiApiKey");
+if(apiKeyInput) apiKeyInput.value = state.geminiApiKey || "";
+
 document.getElementById("saveSettingsBtn").addEventListener("click", ()=>{
   state.ourClanName = document.getElementById("ourClanName").value.trim() || "Carp Diem";
+  if(apiKeyInput) state.geminiApiKey = apiKeyInput.value.trim();
   saveData();
   document.getElementById("clanNameLabel").textContent = state.ourClanName;
   alert("Spremljeno.");
 });
 document.getElementById("clanNameLabel").textContent = state.ourClanName || "Carp Diem";
+
 document.getElementById("wipeBtn").addEventListener("click", ()=>{
   if(confirm("Sigurno želiš obrisati SVE podatke? Ovo se ne može poništiti.")){
-    state = { ourClanName: state.ourClanName, players: [], fights: {} };
+    state = { ourClanName: state.ourClanName, geminiApiKey: state.geminiApiKey, players: [], fights: {} };
     saveData();
     renderCalendar();
     renderTables();
@@ -345,7 +338,7 @@ document.getElementById("wipeBtn").addEventListener("click", ()=>{
 // ---------------------------------------------------------
 // EDITOR MODAL
 // ---------------------------------------------------------
-let editorKey = null; // "YYYY-MM-DD"
+let editorKey = null; 
 let editorFight = null;
 
 function openEditor(y, m, d){
@@ -426,7 +419,6 @@ function updateResultPreview(){
   el.className = "badge " + (win ? "win" : "loss");
 }
 
-// ---- Save / delete ----
 document.getElementById("saveFightBtn").addEventListener("click", ()=>{
   const fight = {
     opponentName: document.getElementById("opponentName").value.trim(),
@@ -464,34 +456,73 @@ document.getElementById("deleteFightBtn").addEventListener("click", ()=>{
   }
 });
 
+// Helper za konverziju datoteke u Base64
+async function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(',')[1]);
+    reader.onerror = error => reject(error);
+    reader.readAsDataURL(file);
+  });
+}
+
 // ---------------------------------------------------------
-// OCR — before fight
+// GEMINI AI API poziv
+// ---------------------------------------------------------
+async function callGeminiVision(file, promptText) {
+  if (!state.geminiApiKey) {
+    throw new Error("API ključ nije unesen! Unesi Google Gemini API ključ u Postavkama.");
+  }
+  const base64Data = await fileToBase64(file);
+  
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${state.geminiApiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { text: promptText },
+          { inline_data: { mime_type: file.type || "image/jpeg", data: base64Data } }
+        ]
+      }]
+    })
+  });
+
+  const data = await response.json();
+  if (data.error) {
+    throw new Error(data.error.message);
+  }
+  return data.candidates[0].content.parts[0].text;
+}
+
+// ---------------------------------------------------------
+// AI — before fight image processing
 // ---------------------------------------------------------
 document.getElementById("beforeImgInput").addEventListener("change", async (e)=>{
   const files = Array.from(e.target.files || []);
   if(!files.length) return;
   const statusEl = document.getElementById("beforeOcrStatus");
-  statusEl.textContent = "Čitam sliku(e)...";
-  let allText = "";
-  try{
+  statusEl.textContent = "Šaljem sliku Gemini AI-ju...";
+  
+  try {
+    const prompt = "Ovo je screenshot stanja klana ili pripreme prije borbe iz igre. Izvuci podatke ako postoje: trofeje (broj), poziciju (broj iza #) i ligu (slovo B, S, G, P, D, L). Vrati u čistom tekstu.";
+    let allText = "";
     for(const file of files){
-      const { data } = await Tesseract.recognize(file, "eng");
-      allText += data.text + "\n----\n";
+      const resText = await callGeminiVision(file, prompt);
+      allText += resText + "\n";
     }
-  }catch(err){
-    statusEl.textContent = "OCR nije uspio: " + err.message;
-    return;
+    document.getElementById("beforeOcrRaw").textContent = allText;
+    applyBeforeOcrGuesses(allText);
+    statusEl.textContent = "Gotovo — provjeri polja ispod.";
+  } catch(err) {
+    statusEl.textContent = "Greška: " + err.message;
   }
-  document.getElementById("beforeOcrRaw").textContent = allText;
-  applyBeforeOcrGuesses(allText);
-  statusEl.textContent = "Gotovo — provjeri polja ispod (OCR nije 100% pouzdan).";
 });
 
 function applyBeforeOcrGuesses(text){
   const leagueMap = {bronze:"B", silver:"S", gold:"G", platinum:"P", diamond:"D", legend:"L", master:"D"};
   const lower = text.toLowerCase();
 
-  // League keyword
   for(const [word, letter] of Object.entries(leagueMap)){
     if(lower.includes(word)){
       if(!document.getElementById("ourLeague").value) document.getElementById("ourLeague").value = letter;
@@ -499,90 +530,73 @@ function applyBeforeOcrGuesses(text){
     }
   }
 
-  // position like "#4"
   const posMatch = text.match(/#\s?(\d{1,4})/);
   if(posMatch && !document.getElementById("ourPosition").value){
     document.getElementById("ourPosition").value = posMatch[1];
   }
 
-  // standalone plausible trophy count (2-4 digit number, not the position number)
   const numbers = (text.match(/\b\d{2,5}\b/g) || []).map(Number);
   if(numbers.length && !document.getElementById("ourTrophies").value){
-    // pick a number different from the position match, in a "trophy-like" range
     const posNum = posMatch ? Number(posMatch[1]) : null;
     const candidate = numbers.find(n => n !== posNum && n < 100000);
     if(candidate!=null) document.getElementById("ourTrophies").value = candidate;
   }
-
-  // opponent name / win ratio / rank patterns for the second screenshot are highly
-  // UI-specific — left for manual entry / copy from the raw OCR text below.
 }
 
 // ---------------------------------------------------------
-// OCR — after fight (leaderboard screenshots)
+// AI — after fight image processing
 // ---------------------------------------------------------
 document.getElementById("afterImgInput").addEventListener("change", async (e)=>{
   const files = Array.from(e.target.files || []);
   if(!files.length) return;
   const statusEl = document.getElementById("afterOcrStatus");
-  statusEl.textContent = "Čitam sliku(e)...";
-  let allText = "";
-  const parsedRows = []; // {rank, name, score}
-  try{
+  statusEl.textContent = "Analiziram rang listu s Gemini AI-jem...";
+
+  try {
+    let allRaw = "";
     for(const file of files){
-      const { data } = await Tesseract.recognize(file, "eng");
-      allText += data.text + "\n----\n";
-      parseLeaderboardText(data.text, parsedRows);
-    }
-  }catch(err){
-    statusEl.textContent = "OCR nije uspio: " + err.message;
-    return;
-  }
-  document.getElementById("afterOcrRaw").textContent = allText;
+      const prompt = `Ovo je screenshot rang liste (leaderboard) iz igre s rezultatima igrača. 
+      Analiziraj sliku i vrati ISKLJUČIVO valjani JSON objekt u sljedećem formatu (bez markdown oznaka poput \`\`\`json):
+      {
+        "ourFinalScore": 1234,
+        "theirFinalScore": 1000,
+        "rows": [
+          {"rank": 1, "name": "ImeIgrača", "score": 500}
+        ]
+      }`;
+      
+      const jsonStr = await callGeminiVision(file, prompt);
+      allRaw += jsonStr + "\n";
+      
+      // Očišćenje eventualnih markdown blockova
+      const cleanJson = jsonStr.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleanJson);
 
-  // Try to find the two big totals (our score / their score) — usually the
-  // two largest standalone numbers near the top of the first screenshot.
-  const totals = (allText.match(/\b\d{3,6}\b/g) || []).map(Number);
-  if(totals.length >= 2){
-    if(!document.getElementById("ourFinalScore").value) document.getElementById("ourFinalScore").value = totals[0];
-    if(!document.getElementById("theirFinalScore").value) document.getElementById("theirFinalScore").value = totals[1];
-    updateResultPreview();
-  }
+      if(parsed.ourFinalScore && !document.getElementById("ourFinalScore").value){
+        document.getElementById("ourFinalScore").value = parsed.ourFinalScore;
+      }
+      if(parsed.theirFinalScore && !document.getElementById("theirFinalScore").value){
+        document.getElementById("theirFinalScore").value = parsed.theirFinalScore;
+      }
+      updateResultPreview();
 
-  // Merge parsed rows into editor, de-duplicating by rank (overlapping
-  // screenshots showing the same row twice should not create duplicates).
-  const byRank = {};
-  parsedRows.forEach(r => { byRank[r.rank] = r; });
-  Object.values(byRank)
-    .sort((a,b)=>a.rank-b.rank)
-    .forEach(r => {
-      // avoid duplicating rows already present with same rank
-      const exists = Array.from(document.querySelectorAll("#playerRows tr")).some(tr=>{
-        return tr.querySelector(".rankInput").value == r.rank;
-      });
-      if(!exists) addPlayerRow(r.name, r.rank, r.score);
-    });
-
-  statusEl.textContent = `Gotovo — pronađeno ${Object.keys(byRank).length} redova, provjeri tablicu ispod (OCR nije 100% pouzdan).`;
-});
-
-function parseLeaderboardText(text, outRows){
-  const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
-  // Expect lines roughly like: "6. jw0w 1896"  or  "20 jw0w 1896" (level+name+score)
-  const lineRe = /^(\d{1,2})[.\s]+.*?([A-Za-zÀ-ſ][A-Za-z0-9À-ſ!.'’\-_ ]{1,24}?)\s+(\d{2,6})\s*$/;
-  for(const line of lines){
-    const m = line.match(lineRe);
-    if(m){
-      const rank = Number(m[1]);
-      let name = m[2].trim();
-      const score = Number(m[3]);
-      // guard against absurd ranks (level numbers misread as rank)
-      if(rank>=1 && rank<=50 && name.length>=2 && score>0){
-        outRows.push({rank, name, score});
+      if(parsed.rows && Array.isArray(parsed.rows)){
+        parsed.rows.forEach(r => {
+          const exists = Array.from(document.querySelectorAll("#playerRows tr")).some(tr=>{
+            return tr.querySelector(".rankInput").value == r.rank;
+          });
+          if(!exists && r.name && r.rank != null){
+            addPlayerRow(r.name, r.rank, r.score || "");
+          }
+        });
       }
     }
+    document.getElementById("afterOcrRaw").textContent = allRaw;
+    statusEl.textContent = "Gotovo — AI je uspješno očitao podatke!";
+  } catch(err) {
+    statusEl.textContent = "Greška: " + err.message;
   }
-}
+});
 
 // ---------------------------------------------------------
 // Init
