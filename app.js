@@ -421,7 +421,7 @@ function updateResultPreview(){
 
 document.getElementById("saveFightBtn").addEventListener("click", ()=>{
   const fight = {
-    opponentName: document.getElementById("opponentName").value.trim(),
+    opponentName: document.getElementById("opponentName").value.trim(), 
     ourTrophies: document.getElementById("ourTrophies").value,
     ourPosition: document.getElementById("ourPosition").value,
     ourLeague: document.getElementById("ourLeague").value,
@@ -578,12 +578,15 @@ document.getElementById("afterImgInput").addEventListener("change", async (e)=>{
   const files = Array.from(e.target.files || []);
   if(!files.length) return;
   const statusEl = document.getElementById("afterOcrStatus");
-  statusEl.textContent = "Analiziram rang listu s Gemini AI-jem...";
+  statusEl.textContent = `Analiziram ${files.length} slika s Gemini AI-jem...`;
 
   try {
     let allRaw = "";
-    for(const file of files){
-      const prompt = `Ovo je screenshot rang liste (leaderboard) iz igre s rezultatima igrača. 
+    for(let i = 0; i < files.length; i++){
+      const file = files[i];
+      statusEl.textContent = `Analiziram sliku ${i+1} od ${files.length}...`;
+      
+      const prompt = `Ovo je screenshot rang liste (leaderboard) iz igre s rezultatima igrača (moguće je da je ovo slika ${i+1} od ukupno ${files.length}). 
       Analiziraj sliku i vrati ISKLJUČIVO valjani JSON objekt u sljedećem formatu (bez markdown oznaka poput \`\`\`json):
       {
         "ourFinalScore": 1234,
@@ -591,12 +594,12 @@ document.getElementById("afterImgInput").addEventListener("change", async (e)=>{
         "rows": [
           {"rank": 1, "name": "ImeIgrača", "score": 500}
         ]
-      }`;
+      }
+      Ako na slici nema ukupnog skora, ostavi polja za score prazna ili 0, ali obavezno izvuci sve igrače i njihove rangove vidljive na ovoj slici.`;
       
       const jsonStr = await callGeminiVision(file, prompt);
-      allRaw += jsonStr + "\n";
+      allRaw += `--- Slika ${i+1} ---\n` + jsonStr + "\n";
       
-      // Očišćenje eventualnih markdown blockova
       const cleanJson = jsonStr.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleanJson);
 
@@ -610,9 +613,14 @@ document.getElementById("afterImgInput").addEventListener("change", async (e)=>{
 
       if(parsed.rows && Array.isArray(parsed.rows)){
         parsed.rows.forEach(r => {
-          const exists = Array.from(document.querySelectorAll("#playerRows tr")).some(tr=>{
-            return tr.querySelector(".rankInput").value == r.rank;
+          // Provjeri postoji li već igrač s tim rankom ili imenom da se ne duplira
+          const rows = Array.from(document.querySelectorAll("#playerRows tr"));
+          const exists = rows.some(tr => {
+            const rVal = tr.querySelector(".rankInput").value;
+            const nVal = tr.querySelector(".nameInput").value.trim().toLowerCase();
+            return rVal == r.rank || (r.name && nVal === r.name.toLowerCase());
           });
+          
           if(!exists && r.name && r.rank != null){
             addPlayerRow(r.name, r.rank, r.score || "");
           }
@@ -620,7 +628,7 @@ document.getElementById("afterImgInput").addEventListener("change", async (e)=>{
       }
     }
     document.getElementById("afterOcrRaw").textContent = allRaw;
-    statusEl.textContent = "Gotovo — AI je uspješno očitao podatke!";
+    statusEl.textContent = "Gotovo — AI je uspješno očitao sve slike!";
   } catch(err) {
     statusEl.textContent = "Greška: " + err.message;
   }
