@@ -467,10 +467,9 @@ async function fileToBase64(file) {
 }
 
 // ---------------------------------------------------------
-// GEMINI AI API poziv
+// GEMINI AI API poziv (s automatskim ponovnim pokušajem kod gužve)
 // ---------------------------------------------------------
-async function callGeminiVision(file, promptText) {
-  // Prvo provjeri input u postavkama, pa onda stanje (state)
+async function callGeminiVision(file, promptText, retries = 3, delay = 2000) {
   const apiKeyInput = document.getElementById("geminiApiKey");
   const apiKey = (apiKeyInput ? apiKeyInput.value.trim() : "") || state.geminiApiKey;
 
@@ -480,27 +479,48 @@ async function callGeminiVision(file, promptText) {
   
   const base64Data = await fileToBase64(file);
   
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: promptText },
-          { inline_data: { mime_type: file.type || "image/jpeg", data: base64Data } }
-        ]
-      }]
-    })
-  });
+  // Možeš probati i s "gemini-3.5-flash" ili "gemini-3.6-flash"
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
 
-  const data = await response.json();
-  if (data.error) {
-    throw new Error(data.error.message);
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: promptText },
+              { inline_data: { mime_type: file.type || "image/jpeg", data: base64Data } }
+            ]
+          }]
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.error) {
+        // Ako je preopterećenje (high demand) i imamo još pokušaja, pričekaj pa probaj ponovno
+        if ((data.error.message.includes("high demand") || data.error.code === 429) && attempt < retries) {
+          console.warn(`Server je zauzet (pokušaj ${attempt}/${retries}). Čekam ${delay/1000}s...`);
+          await new Promise(res => setTimeout(res, delay));
+          delay *= 2; // Eksponencijalno povećanje pauze
+          continue;
+        }
+        throw new Error(data.error.message);
+      }
+      
+      if (!data.candidates || !data.candidates[0].content) {
+        throw new Error("Gemini nije vratio ispravan odgovor.");
+      }
+      
+      return data.candidates[0].content.parts[0].text;
+
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await new Promise(res => setTimeout(res, delay));
+    }
   }
-  if (!data.candidates || !data.candidates[0].content) {
-    throw new Error("Gemini nije vratio ispravan odgovor.");
-  }
-  return data.candidates[0].content.parts[0].text;
 }
 
 // ---------------------------------------------------------
