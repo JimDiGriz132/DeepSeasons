@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="hr">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,9 +11,9 @@
 <header class="topbar">
   <div class="brand">🎣 <span id="clanNameLabel">Carp Diem</span> — Clan War Tracker</div>
   <nav class="tabs">
-    <button class="tab-btn active" data-tab="calendar">Kalendar</button>
-    <button class="tab-btn" data-tab="table">Tablica</button>
-    <button class="tab-btn" data-tab="settings">Postavke</button>
+    <button class="tab-btn active" data-tab="calendar">Calendar</button>
+    <button class="tab-btn" data-tab="table">Table</button>
+    <button class="tab-btn" data-tab="settings">Settings</button>
   </nav>
 </header>
 
@@ -23,48 +23,55 @@
   <section id="tab-calendar" class="tab-panel active">
     <div class="calendar-header">
       <button id="prevMonth">‹</button>
-      <h2 id="calMonthLabel">Kolovoz 2026.</h2>
+      <h2 id="calMonthLabel">August 2026.</h2>
       <button id="nextMonth">›</button>
     </div>
     <div class="calendar-grid" id="calendarGrid"></div>
-    <p class="hint">Klikni na dan da unesеš/urediš podatke za taj fight. Zeleno = WIN, narančasto = LOSS, sivo = nema unosa.</p>
+    <p class="hint">Click on a day to enter/edit data for that fight. Green = WIN, orange = LOSS, gray = no entry.</p>
   </section>
 
   <!-- ===================== TABLE TAB ===================== -->
   <section id="tab-table" class="tab-panel">
-    <div class="table-controls">
-      <button id="prevMonthTable">‹ Prošli mjesec</button>
-      <h2 id="tableMonthLabel">Kolovoz 2026.</h2>
-      <button id="nextMonthTable">Sljedeći mjesec ›</button>
+    <div class="table-controls centered-controls">
+      <button id="prevMonthTable">‹ Previous Month</button>
+      <h2 id="tableMonthLabel">August 2026.</h2>
+      <button id="nextMonthTable">Next Month ›</button>
       <button id="exportBtn">⬇ Export JSON</button>
+      <button id="exportPngBtn">🖼 Export PNG</button>
       <label class="import-label">⬆ Import JSON<input type="file" id="importFile" accept="application/json" hidden></label>
     </div>
-    <div id="tablesContainer"></div>
+    <div id="tablesContainer" class="centered-table-container"></div>
   </section>
 
   <!-- ===================== SETTINGS TAB ===================== -->
   <section id="tab-settings" class="tab-panel">
-    <div class="settings-box">
-      <h2>Postavke</h2>
-      <label>Naziv našeg klana
+    <div class="settings-box centered-settings">
+      <h2>Settings</h2>
+      <label>Our Clan Name
         <input type="text" id="ourClanName" placeholder="Carp Diem">
       </label>
-      <p class="hint">Ovaj naziv se koristi da se prepozna koja je strana "naša" na slikama, i prikazuje se kao naslov stranice.</p>
-      <button id="saveSettingsBtn">Spremi postavke</button>
+      <p class="hint">This name is used to recognize which side is "ours" in images and appears as the page title.</p>
+      
+      <div class="setting-group">
+        <label for="geminiApiKey">Google Gemini API Key:</label>
+        <input type="password" id="geminiApiKey" placeholder="Enter your API key here">
+      </div>
+
+      <button id="saveSettingsBtn">Save Settings</button>
       <hr>
 
+      <h3>Known Players</h3>
+      <p class="hint">This is the canonical spelling for each player — it's what the AI is told to match screenshot names against, and it controls which rows appear in the Table tab. Rename a player here to fix a name everywhere at once; two names typed the same way (ignoring case) get merged automatically.</p>
+      <div id="playersManageList" class="players-manage-list"></div>
+      <div class="add-player-row">
+        <input type="text" id="newPlayerNameInput" placeholder="New player name">
+        <button id="addKnownPlayerBtn" class="secondary">+ Add Player</button>
+      </div>
+      <hr>
 
-<div class="setting-group">
-  <label for="geminiApiKey">Google Gemini API ključ:</label>
-  <input type="password" id="geminiApiKey" placeholder="Unesi svoj API ključ ovdje">
-  <small>Ključ se sprema samo u tvoj preglednik.</small>
-</div>
-
-      <h3>Podaci</h3>
-      <p class="hint">Svi podaci se spremaju lokalno u tvom pregledniku (localStorage). Za sigurnosnu kopiju ili prijenos na drugo računalo koristi Export/Import JSON na kartici "Tablica".</p>
-      <button id="wipeBtn" class="danger">🗑 Obriši sve podatke</button>
-      
-</div>
+      <h3>Data Management</h3>
+      <p class="hint">All data and the API key are saved locally in your browser (localStorage) on your local computer and are never saved externally. For backup or transfer to another computer, use Export/Import JSON on the "Table" tab.</p>
+      <button id="wipeBtn" class="danger">🗑 Delete All Data</button>
     </div>
   </section>
 
@@ -74,7 +81,7 @@
 <div id="editorModal" class="modal-backdrop hidden">
   <div class="modal">
     <div class="modal-head">
-      <h2 id="editorDateLabel">1. listopada 2026.</h2>
+      <h2 id="editorDateLabel">1. October 2026.</h2>
       <button id="closeEditor" class="close-btn">✕</button>
     </div>
 
@@ -82,10 +89,10 @@
 
       <!-- BEFORE FIGHT -->
       <fieldset class="block">
-        <legend>Prije fighta</legend>
+        <legend>Before Fight</legend>
         <div class="upload-row">
           <label class="upload-btn">
-            📷 Učitaj screenshot(ove) prije fighta (standings, protivnik)
+            📷 Upload pre-fight screenshot(s) (standings, opponent)
             <input type="file" id="beforeImgInput" accept="image/*" multiple hidden>
           </label>
           <span id="beforeOcrStatus" class="ocr-status"></span>
@@ -93,46 +100,43 @@
 
         <div class="grid2">
           <div class="col">
-            <h4>Naš klan</h4>
-            <label>Trofeji <input type="number" id="ourTrophies"></label>
-            <label>Pozicija (#) <input type="number" id="ourPosition"></label>
-            <label>Liga
+            <h4>Our Clan</h4>
+            <label>Trophies <input type="text" inputmode="numeric" id="ourTrophies"></label>
+            <label>Position (#) <input type="text" inputmode="numeric" id="ourPosition"></label>
+            <label>League
               <select id="ourLeague">
-                <option value="B">Bronze (B)</option>
-                <option value="S" selected>Silver (S)</option>
-                <option value="G">Gold (G)</option>
-                <option value="P">Platinum (P)</option>
-                <option value="D">Diamond (D)</option>
-                <option value="L">Legend (L)</option>
+                <option value="Warm-up">Warm-up</option>
+                <option value="Novice">Novice</option>
+                <option value="Bronze">Bronze</option>
+                <option value="Silver">Silver</option>
+                <option value="Gold">Gold</option>
               </select>
             </label>
           </div>
           <div class="col">
-            <h4>Protivnik</h4>
-            <label>Naziv kluba <input type="text" id="opponentName" placeholder="npr. Oh-fish-ial"></label>
-            <label>Trofeji <input type="number" id="oppTrophies"></label>
-            <label>Pozicija (#) <input type="number" id="oppPosition"></label>
-            <label>Liga
+            <h4>Opponent</h4>
+            <label>Club Name <input type="text" id="opponentName"></label>
+            <label>Trophies <input type="text" inputmode="numeric" id="oppTrophies"></label>
+            <label>Position (#) <input type="text" inputmode="numeric" id="oppPosition"></label>
+            <label>League
               <select id="oppLeague">
-                <option value="B">Bronze (B)</option>
-                <option value="S" selected>Silver (S)</option>
-                <option value="G">Gold (G)</option>
-                <option value="P">Platinum (P)</option>
-                <option value="D">Diamond (D)</option>
-                <option value="L">Legend (L)</option>
+                <option value="Warm-up">Warm-up</option>
+                <option value="Novice">Novice</option>
+                <option value="Bronze">Bronze</option>
+                <option value="Silver">Silver</option>
+                <option value="Gold">Gold</option>
               </select>
             </label>
           </div>
         </div>
-        <details class="raw-ocr"><summary>Sirovi OCR tekst (za provjeru)</summary><pre id="beforeOcrRaw"></pre></details>
       </fieldset>
 
       <!-- AFTER FIGHT -->
       <fieldset class="block">
-        <legend>Poslije fighta</legend>
+        <legend>After Fight</legend>
         <div class="upload-row">
           <label class="upload-btn">
-            📷 Učitaj screenshot(ove) rezultata (final score + igrači)
+            📷 Upload result screenshot(s) (final score + players)
             <input type="file" id="afterImgInput" accept="image/*" multiple hidden>
           </label>
           <span id="afterOcrStatus" class="ocr-status"></span>
@@ -140,33 +144,33 @@
 
         <div class="grid2">
           <div class="col">
-            <label>Naš final score <input type="number" id="ourFinalScore"></label>
+            <label>Our Final Score <input type="text" inputmode="numeric" id="ourFinalScore"></label>
           </div>
           <div class="col">
-            <label>Njihov final score <input type="number" id="theirFinalScore"></label>
+            <label>Their Final Score <input type="text" inputmode="numeric" id="theirFinalScore"></label>
           </div>
         </div>
-        <div class="result-preview">Rezultat: <span id="resultPreview" class="badge">—</span></div>
+        <div class="result-preview">Result: <span id="resultPreview" class="badge">—</span></div>
 
-        <h4>Igrači (rank u ovom fightu)</h4>
+        <h4>Players (Rank in this fight)</h4>
         <table class="editor-players-table">
-          <thead><tr><th>Rank</th><th>Ime igrača</th><th>Score</th><th></th></tr></thead>
+          <thead><tr><th>Rank</th><th>Player Name</th><th>Score</th><th></th></tr></thead>
           <tbody id="playerRows"></tbody>
         </table>
-        <button id="addPlayerRow" class="secondary">+ Dodaj red</button>
-        <details class="raw-ocr"><summary>Sirovi OCR tekst (za provjeru)</summary><pre id="afterOcrRaw"></pre></details>
+        <button id="addPlayerRow" class="secondary">+ Add Row</button>
       </fieldset>
 
     </div>
 
     <div class="modal-foot">
-      <button id="deleteFightBtn" class="danger">Obriši ovaj dan</button>
-      <button id="saveFightBtn" class="primary">Spremi</button>
+      <button id="deleteFightBtn" class="danger">Delete This Day</button>
+      <button id="saveFightBtn" class="primary">Save</button>
     </div>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
