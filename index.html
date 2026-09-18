@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Carp Diem — Clan War Tracker</title>
+<title>Carp Diem — Clan Wars Table Generator</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header class="topbar">
-  <div class="brand">🎣 <span id="clanNameLabel">Carp Diem</span> — Clan War Tracker</div>
+  <div class="brand">🎣 <span id="clanNameLabel">Carp Diem</span> — Clan War Table Generator</div>
   <nav class="tabs">
     <button class="tab-btn active" data-tab="calendar">Calendar</button>
     <button class="tab-btn" data-tab="table">Table</button>
@@ -52,8 +52,10 @@
       <div class="add-clan-row">
         <input type="text" id="newClanNameInput" placeholder="New clan name">
         <button id="addClanBtn" class="secondary">+ Add Clan</button>
+        <button id="deleteClanBtn" class="danger">Delete Selected Clan</button>
       </div>
       <p class="hint">Each clan keeps its own separate players and fight history. Pick a clan above to switch to its data, or add a new one to start a fresh, empty tracker.</p>
+      <p class="hint">"Delete All Data" only wipes the currently selected clan's players/fights — use "Delete Selected Clan" above to remove a whole clan (e.g. a mistyped name) from the list.</p>
       
       <div class="setting-group">
         <label for="geminiApiKey">Google Gemini API Key:</label>

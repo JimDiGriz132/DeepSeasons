@@ -91,6 +91,32 @@ function addClan(nameRaw){
   switchClan(name);
 }
 
+// Permanently removes a clan (and all its players/fights) from the store.
+// Refuses to delete the last remaining clan — there always has to be one.
+function deleteClan(name){
+  if(!clanStore.clans[name]) return;
+  const names = Object.keys(clanStore.clans);
+  if(names.length <= 1) {
+    alert("Can't delete the only remaining clan.");
+    return;
+  }
+  const wasActive = name === state.ourClanName;
+  delete clanStore.clans[name];
+  if(wasActive){
+    const nextName = Object.keys(clanStore.clans).sort((a,b)=> a.localeCompare(b))[0];
+    state.ourClanName = nextName;
+    state.players = clanStore.clans[nextName].players;
+    state.fights = clanStore.clans[nextName].fights;
+    document.getElementById("clanNameLabel").textContent = state.ourClanName;
+    normalizePlayerCasing();
+  }
+  saveData();
+  renderClanSelect();
+  renderCalendar();
+  renderTables();
+  renderPlayersManageList();
+}
+
 function renderClanSelect(){
   const sel = document.getElementById("clanSelect");
   if(!sel) return;
@@ -565,6 +591,13 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
 // ---------------------------------------------------------
 document.getElementById("clanSelect").addEventListener("change", (e)=>{
   switchClan(e.target.value);
+});
+document.getElementById("deleteClanBtn").addEventListener("click", ()=>{
+  const name = document.getElementById("clanSelect").value;
+  if(!name) return;
+  if(confirm(`Delete clan "${name}" and all its players/fight history? This cannot be undone.`)){
+    deleteClan(name);
+  }
 });
 document.getElementById("addClanBtn").addEventListener("click", ()=>{
   const input = document.getElementById("newClanNameInput");
