@@ -10,19 +10,100 @@ const MONTHS = ["January","February","March","April","May","June",
 const DAYLABELS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 
 // ---------------------------------------------------------
-// Data layer
+// Data layer — multiple clans, each with its own players/fights.
+// Persisted shape: { activeClan, geminiApiKey, clans: { name: {players, fights} } }
+// Older single-clan saves (no "clans" key) are migrated in automatically.
 // ---------------------------------------------------------
-function loadData(){
+function loadClanStore(){
   try{
     const raw = localStorage.getItem(STORAGE_KEY);
-    if(raw) return JSON.parse(raw);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(parsed && parsed.clans && typeof parsed.clans === "object"){
+        return parsed;
+      }
+      if(parsed && parsed.fights){
+        // Old single-clan format — migrate into the new multi-clan store,
+        // keeping all existing data under the clan name that was active.
+        const clanName = (parsed.ourClanName || "Carp Diem").trim() || "Carp Diem";
+        return {
+          activeClan: clanName,
+          geminiApiKey: parsed.geminiApiKey || "",
+          clans: { [clanName]: { players: parsed.players || [], fights: parsed.fights || {} } }
+        };
+      }
+    }
   }catch(e){ console.warn("Could not parse stored data", e); }
-  return { ourClanName: "Carp Diem", geminiApiKey: "", players: [], fights: {} };
+  return { activeClan: "Carp Diem", geminiApiKey: "", clans: { "Carp Diem": { players: [], fights: {} } } };
 }
+
+let clanStore = loadClanStore();
+if(!clanStore.clans[clanStore.activeClan]){
+  clanStore.activeClan = Object.keys(clanStore.clans)[0] || "Carp Diem";
+  if(!clanStore.clans[clanStore.activeClan]) clanStore.clans[clanStore.activeClan] = { players: [], fights: {} };
+}
+
+// `state` mirrors the ACTIVE clan's data, in the same shape the rest of the
+// app already expects (state.players / state.fights). Switching clans swaps
+// these references out; saveData() writes the active clan back into the store.
+let state = {
+  ourClanName: clanStore.activeClan,
+  geminiApiKey: clanStore.geminiApiKey || "",
+  players: clanStore.clans[clanStore.activeClan].players,
+  fights: clanStore.clans[clanStore.activeClan].fights
+};
+
 function saveData(){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  clanStore.activeClan = state.ourClanName;
+  clanStore.geminiApiKey = state.geminiApiKey;
+  clanStore.clans[state.ourClanName] = { players: state.players, fights: state.fights };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(clanStore));
 }
-let state = loadData();
+
+// Switches the active clan: persists whatever's currently loaded, then
+// swaps state.players/state.fights over to the target clan's own dataset.
+function switchClan(name){
+  if(!clanStore.clans[name] || name === state.ourClanName) return;
+  saveData();
+  state.ourClanName = name;
+  state.players = clanStore.clans[name].players;
+  state.fights = clanStore.clans[name].fights;
+  normalizePlayerCasing();
+  saveData();
+  document.getElementById("clanNameLabel").textContent = state.ourClanName;
+  renderClanSelect();
+  renderCalendar();
+  renderTables();
+  renderPlayersManageList();
+}
+
+// Creates a brand-new, empty clan dataset (or just switches to it if a
+// clan with that name — case-insensitively — already exists).
+function addClan(nameRaw){
+  const name = (nameRaw || "").trim();
+  if(!name) return;
+  const existing = Object.keys(clanStore.clans).find(c => c.toLowerCase() === name.toLowerCase());
+  if(existing){
+    switchClan(existing);
+    return;
+  }
+  clanStore.clans[name] = { players: [], fights: {} };
+  switchClan(name);
+}
+
+function renderClanSelect(){
+  const sel = document.getElementById("clanSelect");
+  if(!sel) return;
+  sel.innerHTML = "";
+  Object.keys(clanStore.clans).sort((a,b)=> a.localeCompare(b)).forEach(name=>{
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    if(name === state.ourClanName) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
 normalizePlayerCasing();
 
 // One-time (runs safely every load, but only writes if something actually
@@ -251,12 +332,37 @@ function renderTables(){
   }
 }
 
+// Fixed pixel widths for the table columns, shared by every table block so
+// that a block with fewer entered days still lines up visually with one
+// that has more (columns no longer shrink/grow based on content).
+const TABLE_FIRST_COL_WIDTH = 110;
+const TABLE_DAY_COL_WIDTH = 60;
+
 function buildTableBlock(container, title, days){
   const wrap = document.createElement("div");
   wrap.className = "table-block-wrap";
 
+  const toolbar = document.createElement("div");
+  toolbar.className = "table-block-toolbar";
+  const pngBtn = document.createElement("button");
+  pngBtn.className = "secondary";
+  pngBtn.textContent = "Export PNG";
+  toolbar.appendChild(pngBtn);
+  wrap.appendChild(toolbar);
+
   const table = document.createElement("table");
   table.className = "tracker-table";
+
+  const colgroup = document.createElement("colgroup");
+  const firstCol = document.createElement("col");
+  firstCol.style.width = TABLE_FIRST_COL_WIDTH + "px";
+  colgroup.appendChild(firstCol);
+  days.forEach(()=>{
+    const col = document.createElement("col");
+    col.style.width = TABLE_DAY_COL_WIDTH + "px";
+    colgroup.appendChild(col);
+  });
+  table.appendChild(colgroup);
 
   const dayKeys = days.map(d => dateKey(tableYear, tableMonth, d));
   const fights = dayKeys.map(k => state.fights[k]);
@@ -308,18 +414,14 @@ function buildTableBlock(container, title, days){
 
   const sortedPlayers = [...state.players].sort((a,b)=> a.localeCompare(b));
   sortedPlayers.forEach(player=>{
-    const firstAppearance = findFirstAppearance(player);
     const tr = document.createElement("tr");
     const nameTd = document.createElement("td");
     nameTd.className = "player-name";
     nameTd.textContent = player;
     tr.appendChild(nameTd);
-    fights.forEach((f,i)=>{
+    fights.forEach((f)=>{
       const td = document.createElement("td");
-      const key = dayKeys[i];
-      if(firstAppearance && key < firstAppearance){
-        td.textContent = ""; 
-      } else if(f.playerRanks && Object.prototype.hasOwnProperty.call(f.playerRanks, player)){
+      if(f.playerRanks && Object.prototype.hasOwnProperty.call(f.playerRanks, player)){
         td.textContent = f.playerRanks[player];
       } else {
         td.textContent = "-";
@@ -331,6 +433,29 @@ function buildTableBlock(container, title, days){
 
   wrap.appendChild(table);
   container.appendChild(wrap);
+
+  pngBtn.addEventListener("click", async ()=>{
+    const originalLabel = pngBtn.textContent;
+    pngBtn.textContent = "Exporting…";
+    pngBtn.disabled = true;
+    try{
+      const canvas = await html2canvas(table, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        useCORS: true
+      });
+      const safeTitle = title.replace(/\s+/g, "_");
+      const link = document.createElement("a");
+      link.download = `carp-diem-${MONTHS[tableMonth]}-${tableYear}-${safeTitle}.png`;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+    }catch(err){
+      alert("PNG export failed: " + err.message);
+    }finally{
+      pngBtn.textContent = originalLabel;
+      pngBtn.disabled = false;
+    }
+  });
 }
 
 function cornerCell(text){
@@ -373,55 +498,24 @@ function fmtStanding(trophies, position, league){
   if(trophies==null || trophies==="" ) return "";
   return `${trophies},${position}(${leagueInitial(league)})`;
 }
-function findFirstAppearance(player){
-  const keys = Object.keys(state.fights).sort();
-  for(const k of keys){
-    const f = state.fights[k];
-    if(f.playerRanks && Object.prototype.hasOwnProperty.call(f.playerRanks, player)){
-      return k;
-    }
-  }
-  return null;
-}
 
 // ---------------------------------------------------------
 // EXPORT / IMPORT
 // ---------------------------------------------------------
 document.getElementById("exportBtn").addEventListener("click", ()=>{
-  const blob = new Blob([JSON.stringify(state, null, 2)], {type:"application/json"});
+  const exportObj = {
+    ourClanName: state.ourClanName,
+    geminiApiKey: state.geminiApiKey,
+    players: state.players,
+    fights: state.fights
+  };
+  const blob = new Blob([JSON.stringify(exportObj, null, 2)], {type:"application/json"});
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = "carp-diem-tracker-data.json";
+  a.download = `carp-diem-${state.ourClanName || "tracker"}-data.json`;
   a.click();
   URL.revokeObjectURL(url);
-});
-document.getElementById("exportPngBtn").addEventListener("click", async ()=>{
-  const container = document.getElementById("tablesContainer");
-  if(!container || !container.querySelector(".tracker-table")){
-    alert("No table to export for this month.");
-    return;
-  }
-  const btn = document.getElementById("exportPngBtn");
-  const originalLabel = btn.textContent;
-  btn.textContent = "Exporting…";
-  btn.disabled = true;
-  try{
-    const canvas = await html2canvas(container, {
-      backgroundColor: "#ffffff",
-      scale: 2,
-      useCORS: true
-    });
-    const link = document.createElement("a");
-    link.download = `carp-diem-${MONTHS[tableMonth]}-${tableYear}.png`;
-    link.href = canvas.toDataURL("image/png");
-    link.click();
-  }catch(err){
-    alert("PNG export failed: " + err.message);
-  }finally{
-    btn.textContent = originalLabel;
-    btn.disabled = false;
-  }
 });
 document.getElementById("importFile").addEventListener("change", (e)=>{
   const file = e.target.files[0];
@@ -430,12 +524,32 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
   reader.onload = ()=>{
     try{
       const imported = JSON.parse(reader.result);
-      if(imported && imported.fights){
-        state = imported;
+      if(imported && imported.clans && typeof imported.clans === "object"){
+        // Full multi-clan export — replace the whole store.
+        clanStore = imported;
+        if(!clanStore.clans[clanStore.activeClan]) clanStore.activeClan = Object.keys(clanStore.clans)[0];
+        state.ourClanName = clanStore.activeClan;
+        state.geminiApiKey = clanStore.geminiApiKey || "";
+        state.players = clanStore.clans[state.ourClanName].players;
+        state.fights = clanStore.clans[state.ourClanName].fights;
+        normalizePlayerCasing();
+        saveData();
+        renderClanSelect();
+        document.getElementById("clanNameLabel").textContent = state.ourClanName;
+        renderTables();
+        renderCalendar();
+        renderPlayersManageList();
+        alert("Data imported.");
+      } else if(imported && imported.fights){
+        // Single-clan export — imports into the CURRENTLY active clan.
+        state.players = imported.players || [];
+        state.fights = imported.fights || {};
+        normalizePlayerCasing();
         saveData();
         renderTables();
         renderCalendar();
-        alert("Data imported.");
+        renderPlayersManageList();
+        alert(`Data imported into "${state.ourClanName}".`);
       } else {
         alert("Invalid JSON file.");
       }
@@ -449,22 +563,36 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
 // ---------------------------------------------------------
 // SETTINGS
 // ---------------------------------------------------------
-document.getElementById("ourClanName").value = state.ourClanName || "Carp Diem";
+document.getElementById("clanSelect").addEventListener("change", (e)=>{
+  switchClan(e.target.value);
+});
+document.getElementById("addClanBtn").addEventListener("click", ()=>{
+  const input = document.getElementById("newClanNameInput");
+  addClan(input.value);
+  input.value = "";
+});
+document.getElementById("newClanNameInput").addEventListener("keydown", (e)=>{
+  if(e.key === "Enter"){
+    e.preventDefault();
+    document.getElementById("addClanBtn").click();
+  }
+});
+renderClanSelect();
+
 const apiKeyInput = document.getElementById("geminiApiKey");
 if(apiKeyInput) apiKeyInput.value = state.geminiApiKey || "";
 
 document.getElementById("saveSettingsBtn").addEventListener("click", ()=>{
-  state.ourClanName = document.getElementById("ourClanName").value.trim() || "Carp Diem";
   if(apiKeyInput) state.geminiApiKey = apiKeyInput.value.trim();
   saveData();
-  document.getElementById("clanNameLabel").textContent = state.ourClanName;
   alert("Saved.");
 });
 document.getElementById("clanNameLabel").textContent = state.ourClanName || "Carp Diem";
 
 document.getElementById("wipeBtn").addEventListener("click", ()=>{
-  if(confirm("Are you sure you want to delete ALL data? This cannot be undone.")){
-    state = { ourClanName: state.ourClanName, geminiApiKey: state.geminiApiKey, players: [], fights: {} };
+  if(confirm(`Are you sure you want to delete ALL data for "${state.ourClanName}"? This cannot be undone.`)){
+    state.players = [];
+    state.fights = {};
     saveData();
     renderCalendar();
     renderTables();
@@ -574,6 +702,26 @@ document.getElementById("newPlayerNameInput").addEventListener("keydown", (e)=>{
 let editorKey = null; 
 let editorFight = null;
 
+// Tracks how many AI (Gemini) calls are currently in flight for the open
+// day, so the Save button stays disabled with a spinner until every
+// upload has actually finished being read — prevents saving over an
+// in-progress OCR result.
+let aiProcessingCount = 0;
+function setSaveButtonBusy(busy, reset=false){
+  const btn = document.getElementById("saveFightBtn");
+  if(!btn) return;
+  if(reset){
+    aiProcessingCount = 0;
+  } else if(busy){
+    aiProcessingCount++;
+  } else {
+    aiProcessingCount = Math.max(0, aiProcessingCount - 1);
+  }
+  const isBusy = aiProcessingCount > 0;
+  btn.disabled = isBusy;
+  btn.classList.toggle("is-loading", isBusy);
+}
+
 function openEditor(y, m, d){
   editorKey = dateKey(y,m,d);
   const existing = state.fights[editorKey];
@@ -602,6 +750,7 @@ function openEditor(y, m, d){
 
   renderPlayerRows();
   updateResultPreview();
+  setSaveButtonBusy(false, true); // reset to idle for this fresh open
 
   document.getElementById("editorModal").classList.remove("hidden");
 }
@@ -689,6 +838,109 @@ document.getElementById("deleteFightBtn").addEventListener("click", ()=>{
   }
 });
 
+// Fetches an image from a direct URL (e.g. a Discord CDN attachment link)
+// and returns it as a Blob, usable anywhere a File is used below.
+// Note: only works for direct image links (ending in the image itself,
+// like a Discord "Copy Image Address" link) — not a link to a Discord
+// message/channel. Also requires the host to allow cross-origin fetches;
+// Discord's CDN does, but not every image host will.
+async function urlToImageBlob(url) {
+  let response;
+  try {
+    response = await fetch(url, { mode: "cors" });
+  } catch (err) {
+    throw new Error(`Couldn't fetch image from link (blocked or invalid URL): ${url}`);
+  }
+  if (!response.ok) {
+    throw new Error(`Couldn't fetch image from link (HTTP ${response.status}): ${url}`);
+  }
+  const blob = await response.blob();
+  if (!blob.type || !blob.type.startsWith("image/")) {
+    throw new Error(`Link didn't return an image file: ${url}`);
+  }
+  return blob;
+}
+
+// Parses a comma/newline separated list of URLs typed into one of the
+// "paste image link(s)" boxes into a clean array of non-empty strings.
+function parseUrlList(raw) {
+  return raw
+    .split(/[\n,]/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+// Extracts image URL(s) out of a drag-and-drop event. Dragging an image
+// straight out of a Discord message (in-browser) doesn't hand over an
+// actual file — it hands over the image's URL as text, in one of a few
+// possible formats depending on the browser, so we check all of them.
+function extractUrlsFromDataTransfer(dt) {
+  const urls = [];
+
+  const uriList = dt.getData("text/uri-list");
+  if (uriList) {
+    uriList.split(/\r?\n/).forEach(l => { if (l && !l.startsWith("#")) urls.push(l.trim()); });
+  }
+
+  if (!urls.length) {
+    const plain = dt.getData("text/plain");
+    if (plain) {
+      const matches = plain.match(/https?:\/\/\S+/g);
+      if (matches) urls.push(...matches);
+    }
+  }
+
+  if (!urls.length) {
+    const html = dt.getData("text/html");
+    if (html) {
+      const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+      if (match) urls.push(match[1]);
+    }
+  }
+
+  // Strip a trailing ">" or quote html sometimes leaves behind.
+  return urls.map(u => u.replace(/["'>]+$/, "")).filter(Boolean);
+}
+
+// Wires up a drop zone: dropped images from local disk are queued straight
+// away; dropped Discord/browser images (URL only, no real file) get their
+// link appended into the paired URL input so they go through "Fetch".
+function setupDropZone(zoneId, urlInputId, runFn) {
+  const zone = document.getElementById(zoneId);
+  const urlInput = document.getElementById(urlInputId);
+
+  ["dragenter", "dragover"].forEach(evt => {
+    zone.addEventListener(evt, (e) => {
+      e.preventDefault();
+      zone.classList.add("drag-over");
+    });
+  });
+  ["dragleave", "dragend"].forEach(evt => {
+    zone.addEventListener(evt, () => zone.classList.remove("drag-over"));
+  });
+
+  zone.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    zone.classList.remove("drag-over");
+
+    const dt = e.dataTransfer;
+
+    // Real image file(s) dropped straight from disk — run OCR immediately.
+    const files = Array.from(dt.files || []).filter(f => f.type.startsWith("image/"));
+    if (files.length) {
+      await runFn(files);
+      return;
+    }
+
+    // Otherwise it's a link-only drop (e.g. dragged out of Discord) — append
+    // it to the URL field so multiple drops just pile up comma-separated.
+    const urls = extractUrlsFromDataTransfer(dt);
+    if (!urls.length) return;
+    const existing = parseUrlList(urlInput.value);
+    urlInput.value = [...existing, ...urls].join(", ");
+  });
+}
+
 // Helper for converting a file to Base64
 async function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -703,18 +955,24 @@ async function fileToBase64(file) {
 // GEMINI AI API call (with automatic retry on rate limits / server overload)
 // ---------------------------------------------------------
 
-// Reads Google's suggested wait time out of a 429 error response, if present
-// (error.details contains a RetryInfo object with a "retryDelay" like "33s").
-function getRetryDelayMs(error) {
-  try {
-    const details = error.details || [];
-    const retryInfo = details.find(d => String(d["@type"] || "").includes("RetryInfo"));
-    if (retryInfo && retryInfo.retryDelay) {
-      const seconds = parseFloat(String(retryInfo.retryDelay).replace("s", ""));
-      if (!isNaN(seconds)) return Math.ceil(seconds * 1000) + 500; // small buffer
-    }
-  } catch (e) { /* ignore, fall back to default backoff */ }
-  return null;
+// Waits `ms` milliseconds, calling onTick once a second with the number of
+// whole seconds remaining, so a status message can visibly count down
+// instead of just showing a single static "waiting Xs" message.
+function waitWithCountdown(ms, onTick) {
+  return new Promise(resolve => {
+    let remaining = Math.round(ms / 1000);
+    if (onTick) onTick(remaining);
+    if (remaining <= 0) { resolve(); return; }
+    const interval = setInterval(() => {
+      remaining--;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        resolve();
+      } else if (onTick) {
+        onTick(remaining);
+      }
+    }, 1000);
+  });
 }
 
 async function callGeminiVision(file, promptText, { retries = 5, onStatus = null } = {}) {
@@ -728,7 +986,7 @@ async function callGeminiVision(file, promptText, { retries = 5, onStatus = null
   const base64Data = await fileToBase64(file);
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${apiKey}`;
 
-  let delay = 2000;
+  let delay = 5000; // first retry waits 5s, then 10s, 20s, 40s...
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -758,10 +1016,10 @@ async function callGeminiVision(file, promptText, { retries = 5, onStatus = null
           msg.includes("high demand") || msg.includes("quota");
 
         if (isRetryable && attempt < retries) {
-          const waitMs = getRetryDelayMs(data.error) || delay;
-          console.warn(`Gemini busy/rate-limited (attempt ${attempt}/${retries}). Waiting ${(waitMs/1000).toFixed(1)}s...`);
-          if (onStatus) onStatus(`Gemini is rate-limited — retrying in ${Math.ceil(waitMs/1000)}s (attempt ${attempt}/${retries})...`);
-          await new Promise(res => setTimeout(res, waitMs));
+          console.warn(`Gemini busy/rate-limited (attempt ${attempt}/${retries}). Waiting ${(delay/1000).toFixed(0)}s...`);
+          await waitWithCountdown(delay, (secLeft) => {
+            if (onStatus) onStatus(`Gemini is rate-limited — retrying in ${secLeft}s (attempt ${attempt}/${retries})...`);
+          });
           delay *= 2;
           continue;
         }
@@ -776,8 +1034,9 @@ async function callGeminiVision(file, promptText, { retries = 5, onStatus = null
 
     } catch (err) {
       if (attempt === retries) throw err;
-      if (onStatus) onStatus(`Error contacting Gemini — retrying (attempt ${attempt}/${retries})...`);
-      await new Promise(res => setTimeout(res, delay));
+      await waitWithCountdown(delay, (secLeft) => {
+        if (onStatus) onStatus(`Error contacting Gemini — retrying in ${secLeft}s (attempt ${attempt}/${retries})...`);
+      });
       delay *= 2;
     }
   }
@@ -799,13 +1058,15 @@ function determineLeagueByTrophies(trophies) {
 // ---------------------------------------------------------
 // AI — before fight image processing
 // ---------------------------------------------------------
-document.getElementById("beforeImgInput").addEventListener("change", async (e)=>{
-  const files = Array.from(e.target.files || []);
+async function runBeforeOcr(files) {
   if(!files.length) return;
   const statusEl = document.getElementById("beforeOcrStatus");
   statusEl.textContent = `Analyzing ${files.length} image(s) (before fight)...`;
-  
+  setSaveButtonBusy(true);
+
   try {
+    let anyRejectedTrophies = false;
+    let anyRejectedName = false;
     for(let i = 0; i < files.length; i++){
       const file = files[i];
       statusEl.textContent = `Analyzing image ${i+1} of ${files.length}...`;
@@ -813,20 +1074,25 @@ document.getElementById("beforeImgInput").addEventListener("change", async (e)=>
       const ourName = (state.ourClanName || "our clan").trim();
       const prompt = `These are pre-fight screenshot(s) from Creatures of the Deep clan war. Our clan's name is literally "${ourName}".
 
-      There are two different kinds of clan info you'll see, and you must tell them apart like this:
-      1. Our OWN status header — a small block, usually near the top of the screen, showing a league name (e.g. "bronze league"), a position number with "#" (e.g. "#4"), and a trophy count shown ONLY as a number next to a trophy/cup icon with NO text label (e.g. "91 🏆"). This header has NO clan name or logo printed directly on it — it doesn't need one, because it is inherently the player's own status bar (i.e. it always belongs to "${ourName}"). Do not skip its trophy number just because there's no text label next to it or no clan name attached to it — treat this unlabeled header as ours by default.
-      2. A specific clan's card — a block that DOES explicitly show a clan name and/or logo (e.g. a card titled "bass heads", or a "Clan Challenge" comparison widget with both clan names/logos side by side). Whatever league/position/trophy numbers appear on such a named card belong to THAT specific clan. If the name matches "${ourName}", those numbers reinforce/replace the "our" fields; if it's a different name, those numbers are the opponent's ("opp" fields) and that name is "opponentName".
+      TWO kinds of info blocks appear:
+      1. Our OWN status header: unlabeled (no clan name/logo), just a league name, "#position", and a trophy number next to a cup icon. Always belongs to "${ourName}".
+      2. A clan card/popup (e.g. opened by tapping a clan): has that clan's short name and logo. If the name matches "${ourName}" it's ours; otherwise it's the opponent's — read "opponentName" from it.
 
-      Analyze the image(s) and return EXCLUSIVELY a valid JSON object in the following format (without markdown code fences):
+      For "opponentName", use ONLY the clan's actual short name/title printed right next to its logo (usually just a few characters/words, e.g. "Turtle Town", "猪猪熊"). NEVER use a long description/bio/slogan/rules text box, and NEVER include any numeric IDs, member counts, or "group:"-style numbers you see elsewhere on the card — those are not the name.
+
+      Trophies: use ONLY the number next to a PURPLE/LILAC trophy-cup icon. Ignore any number next to a PINK/MAGENTA diamond/gem icon — that's a different currency, not trophies. Sanity check: trophies here never reach 4 digits (max ~a few hundred); if your number is 1000+, you picked the wrong one — find the smaller purple-icon number instead.
+
+      Return EXCLUSIVELY this JSON (no markdown fences), with real values from the image(s):
       {
         "ourTrophies": 137,
         "ourPosition": 6,
         "opponentName": "example clan name",
+        "opponentNameLatin": "",
         "oppTrophies": 72,
         "oppPosition": 21
       }
-      These numbers above are just a FORMAT example — they are not related to the actual image in any way, so don't let them influence what you read. Read the real numbers fresh from the image(s), even if by coincidence they end up matching this example.
-      If any data is genuinely not visible anywhere in the image(s), leave that field as an empty string or null — but double-check you didn't miss an unlabeled trophy-icon number before giving up, especially for our own header. Do not invent leagues, focus only on exact trophy numbers and positions.`;
+      "opponentNameLatin": only if "opponentName" has Japanese/Korean/Chinese/other non-Latin script — give a romanization or short translation; otherwise leave "".
+      Leave a field empty/null only if genuinely not visible. Don't invent leagues.`;
       
       const jsonStr = await callGeminiVision(file, prompt, {
         onStatus: (msg) => { statusEl.textContent = msg; }
@@ -834,26 +1100,95 @@ document.getElementById("beforeImgInput").addEventListener("change", async (e)=>
       const cleanJson = jsonStr.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleanJson);
 
+      // Sanity check: trophy counts in this game never realistically reach
+      // 4 digits. If the AI still grabbed the pink gem/currency number
+      // instead of the purple trophy number, it'll be way past this — so we
+      // refuse to write it into the field rather than silently saving junk.
+      const MAX_PLAUSIBLE_TROPHIES = 999;
+      const isPlausibleTrophies = (v) => {
+        const n = Number(String(v).replace(/[,.\s]/g, ""));
+        return !isNaN(n) && n <= MAX_PLAUSIBLE_TROPHIES;
+      };
+      // A real clan name is short and has no long digit runs (IDs, group
+      // numbers, member counts). If it looks like that, the AI likely
+      // grabbed a description/bio box instead of the actual name.
+      const isPlausibleClanName = (name) => {
+        if (!name) return false;
+        const trimmed = name.trim();
+        if (trimmed.length > 30) return false;
+        if (/\d{5,}/.test(trimmed)) return false;
+        return true;
+      };
+      let rejectedTrophies = false;
+      let rejectedName = false;
+
       if(parsed.ourTrophies != null && parsed.ourTrophies !== "") {
-        document.getElementById("ourTrophies").value = parsed.ourTrophies;
-        document.getElementById("ourLeague").value = determineLeagueByTrophies(parsed.ourTrophies);
+        if(isPlausibleTrophies(parsed.ourTrophies)) {
+          document.getElementById("ourTrophies").value = parsed.ourTrophies;
+          document.getElementById("ourLeague").value = determineLeagueByTrophies(parsed.ourTrophies);
+        } else {
+          rejectedTrophies = true;
+        }
       }
       if(parsed.ourPosition != null && parsed.ourPosition !== "") {
         document.getElementById("ourPosition").value = parsed.ourPosition;
       }
       if(parsed.opponentName) {
-        document.getElementById("opponentName").value = parsed.opponentName;
+        let oppName = parsed.opponentName.trim();
+        if(isPlausibleClanName(oppName)) {
+          const latin = (parsed.opponentNameLatin || "").trim();
+          if(latin && latin.toLowerCase() !== oppName.toLowerCase()) {
+            oppName = `${oppName} (${latin})`;
+          }
+          document.getElementById("opponentName").value = oppName;
+        } else {
+          rejectedName = true;
+        }
       }
       if(parsed.oppTrophies != null && parsed.oppTrophies !== "") {
-        document.getElementById("oppTrophies").value = parsed.oppTrophies;
-        document.getElementById("oppLeague").value = determineLeagueByTrophies(parsed.oppTrophies);
+        if(isPlausibleTrophies(parsed.oppTrophies)) {
+          document.getElementById("oppTrophies").value = parsed.oppTrophies;
+          document.getElementById("oppLeague").value = determineLeagueByTrophies(parsed.oppTrophies);
+        } else {
+          rejectedTrophies = true;
+        }
       }
       if(parsed.oppPosition != null && parsed.oppPosition !== "") {
         document.getElementById("oppPosition").value = parsed.oppPosition;
       }
+      if(rejectedTrophies) anyRejectedTrophies = true;
+      if(rejectedName) anyRejectedName = true;
     }
     
-    statusEl.textContent = "Done — data and leagues successfully synced!";
+    const warnings = [];
+    if(anyRejectedTrophies) warnings.push("implausible trophies number");
+    if(anyRejectedName) warnings.push("implausible club name (looked like a description/ID, not a name)");
+    statusEl.textContent = warnings.length
+      ? `⚠️ Done, but AI returned ${warnings.join(" and ")} on at least one image — that field was left blank there, please check and enter it manually.`
+      : "Done — data and leagues successfully synced!";
+  } catch(err) {
+    statusEl.textContent = "Error: " + err.message;
+  } finally {
+    setSaveButtonBusy(false);
+  }
+}
+
+document.getElementById("beforeImgInput").addEventListener("change", async (e)=>{
+  const files = Array.from(e.target.files || []);
+  e.target.value = "";
+  await runBeforeOcr(files);
+});
+
+document.getElementById("beforeImgUrlBtn").addEventListener("click", async ()=>{
+  const input = document.getElementById("beforeImgUrlInput");
+  const statusEl = document.getElementById("beforeOcrStatus");
+  const urls = parseUrlList(input.value);
+  if(!urls.length) return;
+  statusEl.textContent = `Fetching ${urls.length} image(s) from link(s)...`;
+  try {
+    const blobs = await Promise.all(urls.map(urlToImageBlob));
+    input.value = "";
+    await runBeforeOcr(blobs);
   } catch(err) {
     statusEl.textContent = "Error: " + err.message;
   }
@@ -862,11 +1197,11 @@ document.getElementById("beforeImgInput").addEventListener("change", async (e)=>
 // ---------------------------------------------------------
 // AI — after fight image processing
 // ---------------------------------------------------------
-document.getElementById("afterImgInput").addEventListener("change", async (e)=>{
-  const files = Array.from(e.target.files || []);
+async function runAfterOcr(files) {
   if(!files.length) return;
   const statusEl = document.getElementById("afterOcrStatus");
   statusEl.textContent = `Analyzing ${files.length} image(s) with Gemini AI...`;
+  setSaveButtonBusy(true);
 
   try {
     for(let i = 0; i < files.length; i++){
@@ -920,12 +1255,38 @@ document.getElementById("afterImgInput").addEventListener("change", async (e)=>{
     statusEl.textContent = "Done — AI successfully processed all images!";
   } catch(err) {
     statusEl.textContent = "Error: " + err.message;
+  } finally {
+    setSaveButtonBusy(false);
+  }
+}
+
+document.getElementById("afterImgInput").addEventListener("change", async (e)=>{
+  const files = Array.from(e.target.files || []);
+  e.target.value = "";
+  await runAfterOcr(files);
+});
+
+document.getElementById("afterImgUrlBtn").addEventListener("click", async ()=>{
+  const input = document.getElementById("afterImgUrlInput");
+  const statusEl = document.getElementById("afterOcrStatus");
+  const urls = parseUrlList(input.value);
+  if(!urls.length) return;
+  statusEl.textContent = `Fetching ${urls.length} image(s) from link(s)...`;
+  try {
+    const blobs = await Promise.all(urls.map(urlToImageBlob));
+    input.value = "";
+    await runAfterOcr(blobs);
+  } catch(err) {
+    statusEl.textContent = "Error: " + err.message;
   }
 });
 
 // ---------------------------------------------------------
 // Init
 // ---------------------------------------------------------
+setupDropZone("beforeDropZone", "beforeImgUrlInput", runBeforeOcr);
+setupDropZone("afterDropZone", "afterImgUrlInput", runAfterOcr);
+
 renderCalendar();
 renderTables();
 renderPlayersManageList();

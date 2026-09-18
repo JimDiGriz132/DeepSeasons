@@ -36,9 +36,8 @@
       <button id="prevMonthTable">‹ Previous Month</button>
       <h2 id="tableMonthLabel">August 2026.</h2>
       <button id="nextMonthTable">Next Month ›</button>
-      <button id="exportBtn">⬇ Export JSON</button>
-      <button id="exportPngBtn">🖼 Export PNG</button>
-      <label class="import-label">⬆ Import JSON<input type="file" id="importFile" accept="application/json" hidden></label>
+      <button id="exportBtn">Export JSON</button>
+      <label class="import-label">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label>
     </div>
     <div id="tablesContainer" class="centered-table-container"></div>
   </section>
@@ -47,10 +46,14 @@
   <section id="tab-settings" class="tab-panel">
     <div class="settings-box centered-settings">
       <h2>Settings</h2>
-      <label>Our Clan Name
-        <input type="text" id="ourClanName" placeholder="Carp Diem">
+      <label>Our Clan
+        <select id="clanSelect"></select>
       </label>
-      <p class="hint">This name is used to recognize which side is "ours" in images and appears as the page title.</p>
+      <div class="add-clan-row">
+        <input type="text" id="newClanNameInput" placeholder="New clan name">
+        <button id="addClanBtn" class="secondary">+ Add Clan</button>
+      </div>
+      <p class="hint">Each clan keeps its own separate players and fight history. Pick a clan above to switch to its data, or add a new one to start a fresh, empty tracker.</p>
       
       <div class="setting-group">
         <label for="geminiApiKey">Google Gemini API Key:</label>
@@ -95,8 +98,13 @@
             📷 Upload pre-fight screenshot(s) (standings, opponent)
             <input type="file" id="beforeImgInput" accept="image/*" multiple hidden>
           </label>
-          <span id="beforeOcrStatus" class="ocr-status"></span>
         </div>
+        <div class="upload-row url-row">
+          <input type="text" id="beforeImgUrlInput" placeholder="or paste image link(s) (e.g. Discord), comma-separated">
+          <button id="beforeImgUrlBtn" class="secondary">Fetch</button>
+        </div>
+        <div id="beforeDropZone" class="drop-zone">⬇️ Drag & drop image(s) from Discord here</div>
+        <span id="beforeOcrStatus" class="ocr-status"></span>
 
         <div class="grid2">
           <div class="col">
@@ -139,8 +147,13 @@
             📷 Upload result screenshot(s) (final score + players)
             <input type="file" id="afterImgInput" accept="image/*" multiple hidden>
           </label>
-          <span id="afterOcrStatus" class="ocr-status"></span>
         </div>
+        <div class="upload-row url-row">
+          <input type="text" id="afterImgUrlInput" placeholder="or paste image link(s) (e.g. Discord), comma-separated">
+          <button id="afterImgUrlBtn" class="secondary">Fetch</button>
+        </div>
+        <div id="afterDropZone" class="drop-zone">⬇️ Drag & drop image(s) from Discord here</div>
+        <span id="afterOcrStatus" class="ocr-status"></span>
 
         <div class="grid2">
           <div class="col">
