@@ -250,3 +250,22 @@ button.danger{background:#fff0ee;color:#c0392b;border:1px solid #e6b3ab;padding:
 
   
 }
+
+/* ===== Supabase / admin additions ===== */
+body:not(.is-admin) .admin-only{display:none !important;}
+.auth-box{display:flex;align-items:center;gap:10px;}
+.sync-status{font-size:.78rem;color:var(--gray);max-width:340px;}
+.sync-status.err{color:#c0392b;font-weight:600;}
+.modal.small{max-width:380px;margin-top:60px;}
+.login-form{padding-bottom:18px;}
+.login-form label{display:block;font-size:.85rem;font-weight:600;margin:10px 0;}
+.login-form input{width:100%;padding:8px;margin-top:4px;border:1px solid var(--border);border-radius:6px;}
+.login-msg{min-height:1.2em;font-size:.82rem;color:#c0392b;margin:6px 0;}
+.score-check{margin-top:10px;font-size:.85rem;font-weight:600;border-radius:8px;}
+.score-check:empty{display:none;}
+.score-check.ok{background:#e9f5da;border:1px solid var(--green);color:#2f5a12;padding:8px 10px;}
+.score-check.bad{background:#fbe9d8;border:1px solid var(--orange);color:#8a4b0f;padding:8px 10px;}
+.score-check.warn{background:#f3f4f6;border:1px solid var(--border);color:#555;padding:8px 10px;}
+.settings-box .inline-check{display:flex;gap:8px;align-items:flex-start;font-weight:500;font-size:.82rem;}
+.settings-box .inline-check input{margin-top:3px;}
+.settings-box input[type=password]{width:100%;padding:8px;margin-top:4px;border:1px solid var(--border);border-radius:6px;}

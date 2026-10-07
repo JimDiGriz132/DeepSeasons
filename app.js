@@ -1,10 +1,36 @@
 /* ===========================================================
-   Carp Diem — Clan War Tracker (Gemini AI Vision OCR)
+   Carp Diem — Clan War Tracker (AI Vision OCR: Gemini / OpenAI / Anthropic / OpenRouter)
    Static, client-side (GitHub Pages friendly).
-   All data lives in localStorage. Images are processed via Gemini AI.
+   All data lives in localStorage. Images are processed via the AI provider you pick in Settings.
 =========================================================== */
 
+// ---------------------------------------------------------
+// SUPABASE CONFIG — paste your project URL + anon (public) key here.
+// (Supabase dashboard → Project Settings → API.) The anon key is meant to
+// be public; what protects the data is Row Level Security (see
+// supabase_setup.sql): everyone can READ, only the admin user can WRITE.
+// AI API keys (Gemini, OpenAI, …) are NEVER sent to Supabase — they stay in this browser.
+// Leave the placeholders as they are to run in local-only mode (old behaviour).
+// ---------------------------------------------------------
+const SUPABASE_URL = "https://qkdijflbuvsztoaxaljt.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_lbqtPmtDI1dBws388aNgcA_5oC7FaxE";
+
+const ADMIN_EMAIL = "admin@deepsessions.local";
+
+const SUPABASE_CONFIGURED = /^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/i.test(SUPABASE_URL) &&
+  !SUPABASE_URL.includes("YOUR-PROJECT") && !SUPABASE_ANON_KEY.startsWith("YOUR-");
+if(SUPABASE_CONFIGURED && !window.supabase){
+  console.warn("supabase-js failed to load (blocked CDN?) — running in local-only mode.");
+}
+const sb = (SUPABASE_CONFIGURED && window.supabase)
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+// Local-only mode (no Supabase) = everything editable, like before.
+let isAdmin = !sb;
+document.body.classList.toggle("is-admin", isAdmin);
+
 const STORAGE_KEY = "cd_tracker_v2";
+const BACKUP_KEY = "cd_tracker_v2_pre_supabase";
 const MONTHS = ["January","February","March","April","May","June",
                     "July","August","September","October","November","December"];
 const DAYLABELS = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
@@ -48,16 +74,194 @@ if(!clanStore.clans[clanStore.activeClan]){
 // these references out; saveData() writes the active clan back into the store.
 let state = {
   ourClanName: clanStore.activeClan,
-  geminiApiKey: clanStore.geminiApiKey || "",
+  // AI settings (local only): keys per provider, chosen provider, model overrides
+  aiProvider: clanStore.aiProvider || "gemini",
+  aiKeys: Object.assign({}, clanStore.aiKeys || {}, (clanStore.aiKeys && clanStore.aiKeys.gemini) ? {} : { gemini: clanStore.geminiApiKey || "" }),
+  aiModels: Object.assign({}, clanStore.aiModels || {}),
+  aiFallback: clanStore.aiFallback !== false,
   players: clanStore.clans[clanStore.activeClan].players,
   fights: clanStore.clans[clanStore.activeClan].fights
 };
 
 function saveData(){
   clanStore.activeClan = state.ourClanName;
-  clanStore.geminiApiKey = state.geminiApiKey;
+  clanStore.geminiApiKey = state.aiKeys.gemini || ""; // kept for older saves
+  clanStore.aiProvider = state.aiProvider;
+  clanStore.aiKeys = state.aiKeys;
+  clanStore.aiModels = state.aiModels;
+  clanStore.aiFallback = state.aiFallback;
   clanStore.clans[state.ourClanName] = { players: state.players, fights: state.fights };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(clanStore));
+}
+
+
+// ---------------------------------------------------------
+// SUPABASE layer. Tables: cw_clans(name, players jsonb), cw_fights(clan, date_key, data jsonb).
+// localStorage stays as an offline cache of whatever was last loaded.
+// ---------------------------------------------------------
+function setSyncStatus(msg, isErr){
+  const el = document.getElementById("syncStatus");
+  if(!el) return;
+  el.textContent = msg || "";
+  el.classList.toggle("err", !!isErr);
+}
+function requireAdminRemote(){
+  if(!sb) return false;
+  if(!isAdmin) throw new Error("Not logged in as admin.");
+  return true;
+}
+async function remoteLoadAll(){
+  const clansRes = await sb.from("cw_clans").select("name,players");
+  if(clansRes.error) throw clansRes.error;
+  const clans = {};
+  (clansRes.data || []).forEach(r => {
+    clans[r.name] = { players: Array.isArray(r.players) ? r.players : [], fights: {} };
+  });
+  // PostgREST returns max 1000 rows per request, so page through.
+  const PAGE = 1000;
+  for(let from = 0; ; from += PAGE){
+    const res = await sb.from("cw_fights").select("clan,date_key,data")
+      .order("clan").order("date_key").range(from, from + PAGE - 1);
+    if(res.error) throw res.error;
+    (res.data || []).forEach(r => {
+      if(!clans[r.clan]) clans[r.clan] = { players: [], fights: {} };
+      clans[r.clan].fights[r.date_key] = r.data;
+    });
+    if(!res.data || res.data.length < PAGE) break;
+  }
+  return clans;
+}
+async function remoteUpsertFights(clan, fightsByKey){
+  if(!requireAdminRemote()) return;
+  const now = new Date().toISOString();
+  const rows = Object.entries(fightsByKey).map(([date_key, data]) => ({ clan, date_key, data, updated_at: now }));
+  for(let i = 0; i < rows.length; i += 200){
+    const { error } = await sb.from("cw_fights").upsert(rows.slice(i, i + 200), { onConflict: "clan,date_key" });
+    if(error) throw error;
+  }
+}
+async function remoteDeleteFight(clan, dateKey){
+  if(!requireAdminRemote()) return;
+  const { error } = await sb.from("cw_fights").delete().eq("clan", clan).eq("date_key", dateKey);
+  if(error) throw error;
+}
+async function remoteSavePlayers(clan, players){
+  if(!requireAdminRemote()) return;
+  const { error } = await sb.from("cw_clans").upsert({ name: clan, players }, { onConflict: "name" });
+  if(error) throw error;
+}
+async function remoteAddClan(name){
+  if(!requireAdminRemote()) return;
+  const { error } = await sb.from("cw_clans").upsert({ name, players: [] }, { onConflict: "name", ignoreDuplicates: true });
+  if(error) throw error;
+}
+async function remoteDeleteClan(name){
+  if(!requireAdminRemote()) return;
+  const { error } = await sb.from("cw_clans").delete().eq("name", name); // fights cascade
+  if(error) throw error;
+}
+// Pushes one clan completely. prune=true also removes remote fights that no
+// longer exist locally (used for "Delete All Data").
+async function remoteSyncClan(clan, data, { prune = false } = {}){
+  if(!requireAdminRemote()) return;
+  await remoteSavePlayers(clan, data.players);
+  await remoteUpsertFights(clan, data.fights);
+  if(prune){
+    const { data: remoteKeys, error } = await sb.from("cw_fights").select("date_key").eq("clan", clan);
+    if(error) throw error;
+    const stale = (remoteKeys || []).map(r => r.date_key).filter(k => !(k in data.fights));
+    for(let i = 0; i < stale.length; i += 100){
+      const del = await sb.from("cw_fights").delete().eq("clan", clan).in("date_key", stale.slice(i, i + 100));
+      if(del.error) throw del.error;
+    }
+  }
+}
+// Background write for non-critical edits (players list etc.): shows a
+// small status in the top bar instead of blocking the UI.
+let syncStatusTimer = null;
+async function bgSync(fn){
+  if(!sb || !isAdmin) return;
+  setSyncStatus("Syncing…");
+  try{
+    await fn();
+    setSyncStatus("Synced ✓");
+    clearTimeout(syncStatusTimer);
+    syncStatusTimer = setTimeout(()=>{
+      const el = document.getElementById("syncStatus");
+      if(el && el.textContent === "Synced ✓") setSyncStatus("");
+    }, 2500);
+  }catch(err){
+    console.error(err);
+    setSyncStatus("⚠ Sync failed: " + (err.message || err) + " — change is only saved locally.", true);
+  }
+}
+
+// Loads everything from Supabase into the in-memory store (+ local cache).
+async function loadFromRemote(){
+  if(!sb) return;
+  setSyncStatus("Loading…");
+  try{
+    const remoteClans = await remoteLoadAll();
+    const names = Object.keys(remoteClans);
+    if(!names.length){
+      const hasLocal = Object.values(clanStore.clans).some(c => c.players.length || Object.keys(c.fights).length);
+      setSyncStatus(hasLocal
+        ? "Database is empty — showing local data. Admin: Settings → “Push local data to Supabase”."
+        : "Database is empty.");
+      return;
+    }
+    // One-time safety copy of the old local-only data before we replace it.
+    try{
+      if(!localStorage.getItem(BACKUP_KEY)){
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if(raw) localStorage.setItem(BACKUP_KEY, raw);
+      }
+    }catch(e){}
+    const prevActive = state.ourClanName;
+    clanStore.clans = remoteClans;
+    const active = remoteClans[prevActive] ? prevActive : names.sort((a,b)=> a.localeCompare(b))[0];
+    state.ourClanName = active;
+    state.players = remoteClans[active].players;
+    state.fights = remoteClans[active].fights;
+    normalizePlayerCasing();
+    saveData();
+    document.getElementById("clanNameLabel").textContent = state.ourClanName;
+    renderClanSelect();
+    renderCalendar();
+    renderTables();
+    renderPlayersManageList();
+    setSyncStatus("");
+  }catch(err){
+    console.error(err);
+    setSyncStatus("⚠ Couldn't reach the database (" + (err.message || err) + ") — showing cached data.", true);
+  }
+}
+
+// Admin session handling -----------------------------------
+async function refreshAdmin(){
+  if(!sb){ isAdmin = true; applyAdminUi(); return; }
+  let email = "";
+  let ok = false;
+  try{
+    const { data } = await sb.auth.getSession();
+    const session = data && data.session;
+    if(session){
+      email = session.user.email || "";
+      const res = await sb.rpc("cw_is_admin");
+      ok = !res.error && res.data === true;
+    }
+  }catch(err){ console.warn("Admin check failed", err); }
+  isAdmin = ok;
+  applyAdminUi(email);
+}
+function applyAdminUi(email){
+  document.body.classList.toggle("is-admin", isAdmin);
+  const btn = document.getElementById("loginBtn");
+  if(btn){
+    btn.style.display = sb ? "" : "none";
+    btn.textContent = isAdmin ? "Logout" : "🔑 Admin login";
+  }
+  if(typeof renderPlayersManageList === "function") renderPlayersManageList();
 }
 
 // Switches the active clan: persists whatever's currently loaded, then
@@ -79,7 +283,7 @@ function switchClan(name){
 
 // Creates a brand-new, empty clan dataset (or just switches to it if a
 // clan with that name — case-insensitively — already exists).
-function addClan(nameRaw){
+async function addClan(nameRaw){
   const name = (nameRaw || "").trim();
   if(!name) return;
   const existing = Object.keys(clanStore.clans).find(c => c.toLowerCase() === name.toLowerCase());
@@ -87,18 +291,26 @@ function addClan(nameRaw){
     switchClan(existing);
     return;
   }
+  if(sb){
+    try{ await remoteAddClan(name); }
+    catch(err){ alert("Couldn't create the clan in the database: " + (err.message || err)); return; }
+  }
   clanStore.clans[name] = { players: [], fights: {} };
   switchClan(name);
 }
 
 // Permanently removes a clan (and all its players/fights) from the store.
 // Refuses to delete the last remaining clan — there always has to be one.
-function deleteClan(name){
+async function deleteClan(name){
   if(!clanStore.clans[name]) return;
   const names = Object.keys(clanStore.clans);
   if(names.length <= 1) {
     alert("Can't delete the only remaining clan.");
     return;
+  }
+  if(sb){
+    try{ await remoteDeleteClan(name); }
+    catch(err){ alert("Couldn't delete the clan in the database: " + (err.message || err)); return; }
   }
   const wasActive = name === state.ourClanName;
   delete clanStore.clans[name];
@@ -184,6 +396,14 @@ function normalizePlayerCasing(){
       if(canon !== name) changed = true;
     });
     f.playerRanks = rebuilt;
+    if(f.playerScores){
+      const rebuiltScores = {};
+      Object.entries(f.playerScores).forEach(([name, sc])=>{
+        const canon = canonicalByLower[name.toLowerCase()] || name;
+        if(!(canon in rebuiltScores)) rebuiltScores[canon] = sc;
+      });
+      f.playerScores = rebuiltScores;
+    }
   });
 
   if(changed) saveData();
@@ -298,7 +518,10 @@ function renderCalendar(){
         cell.appendChild(opp);
       }
     }
-    cell.addEventListener("click", ()=> openEditor(calYear, calMonth, d));
+    cell.addEventListener("click", ()=>{
+      if(!isAdmin && !state.fights[key]) return; // viewers can only open days that have data
+      openEditor(calYear, calMonth, d);
+    });
     grid.appendChild(cell);
   }
 }
@@ -531,7 +754,6 @@ function fmtStanding(trophies, position, league){
 document.getElementById("exportBtn").addEventListener("click", ()=>{
   const exportObj = {
     ourClanName: state.ourClanName,
-    geminiApiKey: state.geminiApiKey,
     players: state.players,
     fights: state.fights
   };
@@ -547,15 +769,35 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
-  reader.onload = ()=>{
+  reader.onload = async ()=>{
     try{
       const imported = JSON.parse(reader.result);
+      const unionPlayers = (a, b)=>{
+        const out = [...a];
+        b.forEach(n=>{ if(!out.some(x => x.toLowerCase() === String(n).toLowerCase())) out.push(n); });
+        return out;
+      };
       if(imported && imported.clans && typeof imported.clans === "object"){
-        // Full multi-clan export — replace the whole store.
+        if(sb){
+          // Database mode: import MERGES into the database (never wipes it).
+          if(!isAdmin){ alert("Log in as admin to import."); return; }
+          setSyncStatus("Importing…");
+          for(const [name, c] of Object.entries(imported.clans)){
+            const cur = clanStore.clans[name];
+            const data = {
+              players: unionPlayers(cur ? cur.players : [], c.players || []),
+              fights: Object.assign({}, cur ? cur.fights : {}, c.fights || {})
+            };
+            await remoteSyncClan(name, data);
+          }
+          await loadFromRemote();
+          alert("Data imported (merged) into the database.");
+          return;
+        }
+        // Local-only: replace the whole store.
         clanStore = imported;
         if(!clanStore.clans[clanStore.activeClan]) clanStore.activeClan = Object.keys(clanStore.clans)[0];
         state.ourClanName = clanStore.activeClan;
-        state.geminiApiKey = clanStore.geminiApiKey || "";
         state.players = clanStore.clans[state.ourClanName].players;
         state.fights = clanStore.clans[state.ourClanName].fights;
         normalizePlayerCasing();
@@ -567,6 +809,18 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
         renderPlayersManageList();
         alert("Data imported.");
       } else if(imported && imported.fights){
+        if(sb){
+          if(!isAdmin){ alert("Log in as admin to import."); return; }
+          state.players = unionPlayers(state.players, imported.players || []);
+          state.fights = Object.assign({}, state.fights, imported.fights || {});
+          normalizePlayerCasing();
+          saveData();
+          setSyncStatus("Importing…");
+          await remoteSyncClan(state.ourClanName, { players: state.players, fights: state.fights });
+          await loadFromRemote();
+          alert(`Data merged into "${state.ourClanName}" in the database.`);
+          return;
+        }
         // Single-clan export — imports into the CURRENTLY active clan.
         state.players = imported.players || [];
         state.fights = imported.fights || {};
@@ -580,7 +834,8 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
         alert("Invalid JSON file.");
       }
     }catch(err){
-      alert("Error reading file: "+err.message);
+      setSyncStatus("⚠ Import failed: " + (err.message || err), true);
+      alert("Error importing file: "+(err.message || err));
     }
   };
   reader.readAsText(file);
@@ -612,11 +867,32 @@ document.getElementById("newClanNameInput").addEventListener("keydown", (e)=>{
 });
 renderClanSelect();
 
-const apiKeyInput = document.getElementById("geminiApiKey");
-if(apiKeyInput) apiKeyInput.value = state.geminiApiKey || "";
+// ---- AI provider settings (everything here stays in this browser) ----
+const aiProviderSel = document.getElementById("aiProvider");
+const aiKeyInput = document.getElementById("aiApiKey");
+const aiModelInput = document.getElementById("aiModel");
+const aiFallbackChk = document.getElementById("aiFallback");
+function renderAiSettings(){
+  const prov = state.aiProvider;
+  const info = AI_PROVIDERS[prov];
+  aiProviderSel.value = prov;
+  aiKeyInput.value = state.aiKeys[prov] || "";
+  aiModelInput.value = state.aiModels[prov] || "";
+  aiModelInput.placeholder = info.defaultModel;
+  aiFallbackChk.checked = state.aiFallback;
+  document.getElementById("aiKeyLabel").textContent = `${info.label} API key:`;
+  document.getElementById("aiKeyHint").textContent = info.hint;
+}
+aiProviderSel.addEventListener("change", ()=>{ state.aiProvider = aiProviderSel.value; renderAiSettings(); });
+// Live-apply (so OCR works even if you forget to press Save); "Save Settings" persists.
+aiKeyInput.addEventListener("input", ()=>{ state.aiKeys[state.aiProvider] = aiKeyInput.value.trim(); });
+aiModelInput.addEventListener("input", ()=>{ state.aiModels[state.aiProvider] = aiModelInput.value.trim(); });
+aiFallbackChk.addEventListener("change", ()=>{ state.aiFallback = aiFallbackChk.checked; });
 
 document.getElementById("saveSettingsBtn").addEventListener("click", ()=>{
-  if(apiKeyInput) state.geminiApiKey = apiKeyInput.value.trim();
+  state.aiKeys[state.aiProvider] = aiKeyInput.value.trim();
+  state.aiModels[state.aiProvider] = aiModelInput.value.trim();
+  state.aiFallback = aiFallbackChk.checked;
   saveData();
   alert("Saved.");
 });
@@ -624,13 +900,53 @@ document.getElementById("clanNameLabel").textContent = state.ourClanName || "Car
 
 document.getElementById("wipeBtn").addEventListener("click", ()=>{
   if(confirm(`Are you sure you want to delete ALL data for "${state.ourClanName}"? This cannot be undone.`)){
+    const clanName = state.ourClanName;
     state.players = [];
     state.fights = {};
     saveData();
     renderCalendar();
     renderTables();
     renderPlayersManageList();
+    bgSync(()=> remoteSyncClan(clanName, { players: [], fights: {} }, { prune: true }));
     alert("All data deleted.");
+  }
+});
+
+// One-time migration: push data that only lives in this browser (from the
+// old localStorage-only version) up to Supabase.
+function readLocalBackupClans(){
+  try{
+    const raw = localStorage.getItem(BACKUP_KEY);
+    if(!raw) return null;
+    const parsed = JSON.parse(raw);
+    if(parsed && parsed.clans) return parsed.clans;
+    if(parsed && parsed.fights){
+      const n = (parsed.ourClanName || "Carp Diem").trim() || "Carp Diem";
+      return { [n]: { players: parsed.players || [], fights: parsed.fights || {} } };
+    }
+  }catch(e){}
+  return null;
+}
+document.getElementById("pushLocalBtn").addEventListener("click", async ()=>{
+  if(!sb || !isAdmin){ alert("Log in as admin first."); return; }
+  const src = readLocalBackupClans() || clanStore.clans;
+  const names = Object.keys(src);
+  const fightCount = names.reduce((n, c)=> n + Object.keys(src[c].fights || {}).length, 0);
+  if(!names.length || !fightCount && !names.some(c => (src[c].players||[]).length)){
+    alert("There's no local data to push.");
+    return;
+  }
+  if(!confirm(`Push ${names.length} clan(s) / ${fightCount} fight day(s) from this browser to the database?\n\nDays that already exist in the database with the same date get overwritten by this browser's version.`)) return;
+  setSyncStatus("Pushing…");
+  try{
+    for(const name of names){
+      await remoteSyncClan(name, { players: src[name].players || [], fights: src[name].fights || {} });
+    }
+    await loadFromRemote();
+    alert("Local data pushed to the database.");
+  }catch(err){
+    setSyncStatus("⚠ Push failed: " + (err.message || err), true);
+    alert("Push failed: " + (err.message || err));
   }
 });
 
@@ -656,10 +972,11 @@ function renderPlayersManageList(){
     const input = document.createElement("input");
     input.type = "text";
     input.value = name;
+    input.disabled = !isAdmin;
     input.addEventListener("change", ()=> renamePlayer(name, input.value));
 
     const delBtn = document.createElement("button");
-    delBtn.className = "row-del";
+    delBtn.className = "row-del admin-only";
     delBtn.title = "Remove player";
     delBtn.textContent = "✕";
     delBtn.addEventListener("click", ()=> deletePlayer(name));
@@ -689,19 +1006,36 @@ function renamePlayer(oldName, newNameRaw){
     state.players.push(targetName);
   }
 
-  Object.values(state.fights).forEach(f=>{
+  const changedKeys = [];
+  Object.entries(state.fights).forEach(([key, f])=>{
+    let touched = false;
     if(f.playerRanks && Object.prototype.hasOwnProperty.call(f.playerRanks, oldName)){
       const rank = f.playerRanks[oldName];
       delete f.playerRanks[oldName];
       if(!(targetName in f.playerRanks)){
         f.playerRanks[targetName] = rank;
       }
+      touched = true;
     }
+    if(f.playerScores && Object.prototype.hasOwnProperty.call(f.playerScores, oldName)){
+      const sc = f.playerScores[oldName];
+      delete f.playerScores[oldName];
+      if(!(targetName in f.playerScores)) f.playerScores[targetName] = sc;
+      touched = true;
+    }
+    if(touched) changedKeys.push(key);
   });
 
   saveData();
   renderPlayersManageList();
   renderTables();
+
+  const clan = state.ourClanName, players = [...state.players], changed = {};
+  changedKeys.forEach(k => { changed[k] = state.fights[k]; });
+  bgSync(async ()=>{
+    await remoteSavePlayers(clan, players);
+    await remoteUpsertFights(clan, changed);
+  });
 }
 
 function deletePlayer(name){
@@ -710,6 +1044,8 @@ function deletePlayer(name){
   saveData();
   renderPlayersManageList();
   renderTables();
+  const clan = state.ourClanName, players = [...state.players];
+  bgSync(()=> remoteSavePlayers(clan, players));
 }
 
 document.getElementById("addKnownPlayerBtn").addEventListener("click", ()=>{
@@ -721,6 +1057,8 @@ document.getElementById("addKnownPlayerBtn").addEventListener("click", ()=>{
   input.value = "";
   renderPlayersManageList();
   renderTables();
+  const clan = state.ourClanName, players = [...state.players];
+  bgSync(()=> remoteSavePlayers(clan, players));
 });
 document.getElementById("newPlayerNameInput").addEventListener("keydown", (e)=>{
   if(e.key === "Enter"){
@@ -735,7 +1073,18 @@ document.getElementById("newPlayerNameInput").addEventListener("keydown", (e)=>{
 let editorKey = null; 
 let editorFight = null;
 
-// Tracks how many AI (Gemini) calls are currently in flight for the open
+// Every AI job belongs to the "session" of the currently open day. Closing
+// or switching the day cancels the session: in-flight requests are aborted,
+// retry countdowns stop, and late results are ignored.
+let aiSessionId = 0;
+let aiAbortController = new AbortController();
+function cancelAiSession(){
+  aiSessionId++;
+  aiAbortController.abort();
+  aiAbortController = new AbortController();
+}
+
+// Tracks how many AI calls are currently in flight for the open
 // day, so the Save button stays disabled with a spinner until every
 // upload has actually finished being read — prevents saving over an
 // in-progress OCR result.
@@ -756,13 +1105,14 @@ function setSaveButtonBusy(busy, reset=false){
 }
 
 function openEditor(y, m, d){
+  cancelAiSession();
   editorKey = dateKey(y,m,d);
   const existing = state.fights[editorKey];
   editorFight = existing ? JSON.parse(JSON.stringify(existing)) : {
     opponentName:"", ourTrophies:"", ourPosition:"", ourLeague:"Warm-up",
     oppTrophies:"", oppPosition:"", oppLeague:"Warm-up",
     ourFinalScore:"", theirFinalScore:"",
-    playerRanks:{}
+    playerRanks:{}, playerScores:{}
   };
 
   document.getElementById("editorDateLabel").textContent =
@@ -775,8 +1125,8 @@ function openEditor(y, m, d){
   document.getElementById("oppTrophies").value = editorFight.oppTrophies || "";
   document.getElementById("oppPosition").value = editorFight.oppPosition || "";
   document.getElementById("oppLeague").value = editorFight.oppLeague || "Warm-up";
-  document.getElementById("ourFinalScore").value = editorFight.ourFinalScore || "";
-  document.getElementById("theirFinalScore").value = editorFight.theirFinalScore || "";
+  document.getElementById("ourFinalScore").value = editorFight.ourFinalScore ?? "";
+  document.getElementById("theirFinalScore").value = editorFight.theirFinalScore ?? "";
   
   document.getElementById("beforeOcrStatus").textContent = "";
   document.getElementById("afterOcrStatus").textContent = "";
@@ -785,18 +1135,30 @@ function openEditor(y, m, d){
   updateResultPreview();
   setSaveButtonBusy(false, true); // reset to idle for this fresh open
 
+  // Viewers (not logged in as admin) get a read-only view.
+  const readOnly = !isAdmin;
+  document.querySelectorAll("#editorModal .modal-body input, #editorModal .modal-body select, #editorModal .modal-body button")
+    .forEach(el => { el.disabled = readOnly; });
+
   document.getElementById("editorModal").classList.remove("hidden");
 }
-document.getElementById("closeEditor").addEventListener("click", ()=>{
+function closeEditorModal(){
+  cancelAiSession();
+  setSaveButtonBusy(false, true);
+  document.getElementById("beforeOcrStatus").textContent = "";
+  document.getElementById("afterOcrStatus").textContent = "";
   document.getElementById("editorModal").classList.add("hidden");
-});
+}
+document.getElementById("closeEditor").addEventListener("click", closeEditorModal);
 
 function renderPlayerRows(){
   const tbody = document.getElementById("playerRows");
   tbody.innerHTML = "";
   const entries = Object.entries(editorFight.playerRanks || {})
     .sort((a,b)=> (Number(a[1])||999) - (Number(b[1])||999));
-  entries.forEach(([name, rank])=> addPlayerRow(name, rank));
+  const scores = editorFight.playerScores || {};
+  entries.forEach(([name, rank])=> addPlayerRow(name, rank, scores[name] ?? ""));
+  updateScoreCheck();
 }
 function addPlayerRow(name="", rank="", score=""){
   const tbody = document.getElementById("playerRows");
@@ -807,9 +1169,11 @@ function addPlayerRow(name="", rank="", score=""){
     <td><input type="text" inputmode="numeric" class="scoreInput" value="${score}" placeholder="score"></td>
     <td><button class="row-del" title="Delete row">✕</button></td>
   `;
-  tr.querySelector(".row-del").addEventListener("click", ()=> tr.remove());
+  tr.querySelector(".row-del").addEventListener("click", ()=>{ tr.remove(); updateScoreCheck(); });
   tbody.appendChild(tr);
+  updateScoreCheck();
 }
+document.getElementById("playerRows").addEventListener("input", updateScoreCheck);
 document.getElementById("addPlayerRow").addEventListener("click", ()=> addPlayerRow());
 
 function escapeHtml(s){
@@ -826,14 +1190,70 @@ function updateResultPreview(){
   if(our==="" || their===""){
     el.textContent = "—";
     el.className = "badge";
-    return;
+  } else {
+    const win = Number(our) >= Number(their);
+    el.textContent = win ? "WIN" : "LOSS";
+    el.className = "badge " + (win ? "win" : "loss");
   }
-  const win = Number(our) >= Number(their);
-  el.textContent = win ? "WIN" : "LOSS";
-  el.className = "badge " + (win ? "win" : "loss");
+  updateScoreCheck();
 }
 
-document.getElementById("saveFightBtn").addEventListener("click", ()=>{
+// "8 290" / "8,290" / "1.744" -> 8290 / 1744. Returns null if empty/invalid.
+function parseScoreVal(v){
+  if(v === null || v === undefined) return null;
+  const t = String(v).replace(/[\s\u00a0,.]/g, "");
+  if(t === "" || !/^-?\d+$/.test(t)) return null;
+  return Number(t);
+}
+// Only the TOP 5 players (by rank) count towards the clan's final score,
+// so the check adds up just those and compares with the AI-read final score.
+const SCORE_COUNTING_PLAYERS = 5;
+function updateScoreCheck(){
+  const el = document.getElementById("scoreCheck");
+  if(!el) return;
+  const rows = Array.from(document.querySelectorAll("#playerRows tr")).map(tr => ({
+    rank: parseScoreVal(tr.querySelector(".rankInput").value),
+    score: parseScoreVal(tr.querySelector(".scoreInput").value)
+  }));
+  // top N by rank (rows without a rank go last)
+  const top = rows
+    .filter(r => r.rank !== null && r.rank <= SCORE_COUNTING_PLAYERS)
+    .sort((a, b) => a.rank - b.rank)
+    .slice(0, SCORE_COUNTING_PLAYERS);
+  const withScore = top.filter(r => r.score !== null);
+  if(!withScore.length){
+    el.textContent = "";
+    el.className = "score-check";
+    return;
+  }
+  const sum = withScore.reduce((n, r) => n + r.score, 0);
+  const fmt = n => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  const ourFinal = parseScoreVal(document.getElementById("ourFinalScore").value);
+  const label = `Σ top ${withScore.length} players`;
+  let msg, cls;
+  if(ourFinal === null){
+    msg = `${label} = ${fmt(sum)} — enter our final score to compare.`;
+    cls = "score-check warn";
+  } else if(sum === ourFinal){
+    msg = `✅ ${label} = ${fmt(sum)} matches our final score ${fmt(ourFinal)} — OCR looks consistent.`;
+    cls = "score-check ok";
+  } else {
+    const diff = ourFinal - sum;
+    const hint = diff > 0
+      ? "a player is probably missing or a score was read too low."
+      : "a score was probably read too high, or the final score was read wrong.";
+    msg = `⚠️ ${label} = ${fmt(sum)} but our final score is ${fmt(ourFinal)} (difference ${diff > 0 ? "+" : "−"}${fmt(Math.abs(diff))}) — ${hint}`;
+    cls = "score-check bad";
+  }
+  el.textContent = msg;
+  el.className = cls;
+}
+
+document.getElementById("saveFightBtn").addEventListener("click", async ()=>{
+  if(!isAdmin) return;
+  const btn = document.getElementById("saveFightBtn");
+  const clan = state.ourClanName;
+  const key = editorKey;
   const fight = {
     opponentName: document.getElementById("opponentName").value.trim(), 
     ourTrophies: document.getElementById("ourTrophies").value,
@@ -844,31 +1264,58 @@ document.getElementById("saveFightBtn").addEventListener("click", ()=>{
     oppLeague: document.getElementById("oppLeague").value,
     ourFinalScore: document.getElementById("ourFinalScore").value,
     theirFinalScore: document.getElementById("theirFinalScore").value,
-    playerRanks: {}
+    playerRanks: {},
+    playerScores: {}
   };
+  const playersAfter = [...state.players];
   document.querySelectorAll("#playerRows tr").forEach(tr=>{
     const rawName = tr.querySelector(".nameInput").value.trim();
     const rank = tr.querySelector(".rankInput").value;
     if(rawName && rank!==""){
-      const name = canonicalPlayerName(rawName);
+      const name = playersAfter.find(p => p.toLowerCase() === rawName.toLowerCase()) || rawName;
       fight.playerRanks[name] = Number(rank);
-      ensurePlayer(name);
+      const sc = parseScoreVal(tr.querySelector(".scoreInput").value);
+      if(sc !== null) fight.playerScores[name] = sc;
+      if(!playersAfter.some(p => p.toLowerCase() === name.toLowerCase())) playersAfter.push(name);
     }
   });
-  state.fights[editorKey] = fight;
+
+  // Database first: if it fails the modal stays open and nothing is lost.
+  if(sb){
+    btn.disabled = true;
+    try{
+      await remoteUpsertFights(clan, { [key]: fight });
+      await remoteSavePlayers(clan, playersAfter);
+    }catch(err){
+      console.error(err);
+      alert("Couldn't save to the database: " + (err.message || err) + "\n\nNothing was changed — try again (are you still logged in?).");
+      btn.disabled = aiProcessingCount > 0;
+      return;
+    }
+    btn.disabled = aiProcessingCount > 0;
+  }
+  if(clan !== state.ourClanName) return; // clan was switched meanwhile (data is saved remotely)
+  state.players = playersAfter;
+  state.fights[key] = fight;
   saveData();
-  document.getElementById("editorModal").classList.add("hidden");
+  closeEditorModal();
   renderCalendar();
   renderTables();
 });
-document.getElementById("deleteFightBtn").addEventListener("click", ()=>{
-  if(confirm("Delete data for this day?")){
-    delete state.fights[editorKey];
-    saveData();
-    document.getElementById("editorModal").classList.add("hidden");
-    renderCalendar();
-    renderTables();
+document.getElementById("deleteFightBtn").addEventListener("click", async ()=>{
+  if(!isAdmin) return;
+  if(!confirm("Delete data for this day?")) return;
+  const clan = state.ourClanName, key = editorKey;
+  if(sb){
+    try{ await remoteDeleteFight(clan, key); }
+    catch(err){ alert("Couldn't delete in the database: " + (err.message || err)); return; }
   }
+  if(clan !== state.ourClanName) return;
+  delete state.fights[key];
+  saveData();
+  closeEditorModal();
+  renderCalendar();
+  renderTables();
 });
 
 // Fetches an image from a direct URL (e.g. a Discord CDN attachment link)
@@ -988,91 +1435,205 @@ async function fileToBase64(file) {
 // GEMINI AI API call (with automatic retry on rate limits / server overload)
 // ---------------------------------------------------------
 
+function makeAbortError(){
+  const e = new Error("Cancelled");
+  e.name = "AbortError";
+  return e;
+}
+
 // Waits `ms` milliseconds, calling onTick once a second with the number of
-// whole seconds remaining, so a status message can visibly count down
-// instead of just showing a single static "waiting Xs" message.
-function waitWithCountdown(ms, onTick) {
-  return new Promise(resolve => {
+// whole seconds remaining. Rejects with an AbortError as soon as `signal`
+// is aborted (e.g. the day editor was closed), so retries stop immediately.
+function waitWithCountdown(ms, onTick, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) { reject(makeAbortError()); return; }
     let remaining = Math.round(ms / 1000);
     if (onTick) onTick(remaining);
     if (remaining <= 0) { resolve(); return; }
-    const interval = setInterval(() => {
+    let interval = null;
+    const onAbort = () => { clearInterval(interval); reject(makeAbortError()); };
+    interval = setInterval(() => {
       remaining--;
       if (remaining <= 0) {
         clearInterval(interval);
+        if (signal) signal.removeEventListener("abort", onAbort);
         resolve();
       } else if (onTick) {
         onTick(remaining);
       }
     }, 1000);
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
-async function callGeminiVision(file, promptText, { retries = 5, onStatus = null } = {}) {
-  const apiKeyInput = document.getElementById("geminiApiKey");
-  const apiKey = (apiKeyInput ? apiKeyInput.value.trim() : "") || state.geminiApiKey;
-
-  if (!apiKey) {
-    throw new Error("API key is missing! Enter your Google Gemini API key in Settings.");
+// ---------------------------------------------------------
+// AI providers. All of them are called straight from the browser with the
+// user's own key. To add another provider, add an entry here (request
+// builder + response parser) and an <option> in index.html.
+// ---------------------------------------------------------
+const AI_PROVIDERS = {
+  gemini: {
+    label: "Google Gemini",
+    defaultModel: "gemini-flash-lite-latest",
+    hint: "Free tier available — create a key at aistudio.google.com/apikey.",
+    build(key, model, b64, mime, prompt){
+      return {
+        url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
+        headers: { "Content-Type": "application/json" },
+        body: { contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mime, data: b64 } }] }], generationConfig: { temperature: 0 } }
+      };
+    },
+    parse(data){
+      const t = data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
+      return t && t[0] ? t[0].text : null;
+    }
+  },
+  openai: {
+    label: "OpenAI",
+    defaultModel: "gpt-4o-mini",
+    hint: "Paid (needs credit on your account) — platform.openai.com/api-keys. Any vision-capable model works.",
+    build(key, model, b64, mime, prompt){
+      return {
+        url: "https://api.openai.com/v1/chat/completions",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+        body: { model, messages: [{ role: "user", content: [
+          { type: "text", text: prompt },
+          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } }
+        ] }] }
+      };
+    },
+    parse(data){ return data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : null; }
+  },
+  anthropic: {
+    label: "Anthropic (Claude)",
+    defaultModel: "claude-haiku-4-5-20251001",
+    hint: "Paid — console.anthropic.com. Any Claude model with vision works.",
+    build(key, model, b64, mime, prompt){
+      return {
+        url: "https://api.anthropic.com/v1/messages",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+          "anthropic-dangerous-direct-browser-access": "true"
+        },
+        body: { model, max_tokens: 2000, temperature: 0, messages: [{ role: "user", content: [
+          { type: "image", source: { type: "base64", media_type: mime, data: b64 } },
+          { type: "text", text: prompt }
+        ] }] }
+      };
+    },
+    parse(data){ return data.content && data.content[0] ? data.content[0].text : null; }
+  },
+  openrouter: {
+    label: "OpenRouter",
+    defaultModel: "openai/gpt-4o-mini",
+    hint: "One key for many models (some free ones, marked “:free”) — openrouter.ai/keys. Put any vision-capable model id in the Model field.",
+    build(key, model, b64, mime, prompt){
+      return {
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
+        body: { model, temperature: 0, messages: [{ role: "user", content: [
+          { type: "text", text: prompt },
+          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } }
+        ] }] }
+      };
+    },
+    parse(data){ return data.choices && data.choices[0] && data.choices[0].message ? data.choices[0].message.content : null; }
   }
-  
+};
+
+function aiErrorMessage(data){
+  if(!data) return "";
+  const e = data.error;
+  if(!e) return "";
+  return typeof e === "string" ? e : (e.message || JSON.stringify(e));
+}
+
+// One provider, with retry + countdown on rate limits / overload / network errors.
+async function callProvider(providerId, file, promptText, { retries = 5, onStatus = null, signal = null } = {}) {
+  const prov = AI_PROVIDERS[providerId];
+  const apiKey = (state.aiKeys[providerId] || "").trim();
+  if (!apiKey) throw new Error(`${prov.label} API key is missing! Add it in Settings.`);
+  const model = (state.aiModels[providerId] || "").trim() || prov.defaultModel;
   const base64Data = await fileToBase64(file);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${apiKey}`;
+  const req = prov.build(apiKey, model, base64Data, file.type || "image/jpeg", promptText);
 
   let delay = 5000; // first retry waits 5s, then 10s, 20s, 40s...
 
   for (let attempt = 1; attempt <= retries; attempt++) {
+    if (signal && signal.aborted) throw makeAbortError();
     try {
-      const response = await fetch(url, {
+      const response = await fetch(req.url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: promptText },
-              { inline_data: { mime_type: file.type || "image/jpeg", data: base64Data } }
-            ]
-          }],
-          generationConfig: {
-            temperature: 0
-          }
-        })
+        headers: req.headers,
+        signal,
+        body: JSON.stringify(req.body)
       });
 
-      const data = await response.json();
-      
-      if (data.error) {
-        const msg = data.error.message || "";
-        const isRetryable = data.error.code === 429 ||
-          data.error.status === "RESOURCE_EXHAUSTED" ||
-          data.error.status === "UNAVAILABLE" ||
-          msg.includes("high demand") || msg.includes("quota");
+      let data = null;
+      try { data = await response.json(); } catch (e) { data = null; }
+      const msg = aiErrorMessage(data);
+
+      if (!response.ok || msg) {
+        const isRetryable = response.status === 429 || response.status === 503 ||
+          response.status === 529 || response.status >= 500 ||
+          /high demand|quota|overloaded|rate.?limit/i.test(msg);
 
         if (isRetryable && attempt < retries) {
-          console.warn(`Gemini busy/rate-limited (attempt ${attempt}/${retries}). Waiting ${(delay/1000).toFixed(0)}s...`);
+          console.warn(`${prov.label} busy/rate-limited (attempt ${attempt}/${retries}). Waiting ${(delay/1000).toFixed(0)}s...`);
           await waitWithCountdown(delay, (secLeft) => {
-            if (onStatus) onStatus(`Gemini is rate-limited — retrying in ${secLeft}s (attempt ${attempt}/${retries})...`);
-          });
+            if (onStatus) onStatus(`${prov.label} is rate-limited — retrying in ${secLeft}s (attempt ${attempt}/${retries})...`);
+          }, signal);
           delay *= 2;
           continue;
         }
-        throw new Error(msg || "Gemini API error.");
+        // Bad key, bad request, etc. — retrying can't fix these.
+        const apiErr = new Error(msg || `${prov.label} error (HTTP ${response.status}).`);
+        apiErr.fatal = true;
+        throw apiErr;
       }
-      
-      if (!data.candidates || !data.candidates[0].content) {
-        throw new Error("Gemini returned an invalid response.");
-      }
-      
-      return data.candidates[0].content.parts[0].text;
+
+      const text = prov.parse(data);
+      if (!text) throw new Error(`${prov.label} returned an invalid response.`);
+      return text;
 
     } catch (err) {
-      if (attempt === retries) throw err;
+      if (err.name === "AbortError" || (signal && signal.aborted)) throw makeAbortError();
+      if (err.fatal || attempt === retries) throw err;
       await waitWithCountdown(delay, (secLeft) => {
-        if (onStatus) onStatus(`Error contacting Gemini — retrying in ${secLeft}s (attempt ${attempt}/${retries})...`);
-      });
+        if (onStatus) onStatus(`Error contacting ${prov.label} (${err.message}) — retrying in ${secLeft}s (attempt ${attempt}/${retries})...`);
+      }, signal);
       delay *= 2;
     }
   }
+}
+
+// Uses the selected provider; if "fallback" is on and it fails, tries every
+// other provider that has a key saved.
+async function callAiVision(file, promptText, opts = {}) {
+  const hasKey = id => !!(state.aiKeys[id] || "").trim();
+  let order = [state.aiProvider];
+  if (state.aiFallback) {
+    order = order.concat(Object.keys(AI_PROVIDERS).filter(id => id !== state.aiProvider && hasKey(id)));
+  }
+  if (!hasKey(state.aiProvider) && order.length > 1) order = order.filter(hasKey); // skip providers without a key
+  let lastErr = null;
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i];
+    const more = i < order.length - 1;
+    try {
+      return await callProvider(id, file, promptText, { ...opts, retries: more ? 2 : (opts.retries || 5) });
+    } catch (err) {
+      if (err.name === "AbortError") throw err;
+      lastErr = err;
+      if (more && opts.onStatus) {
+        opts.onStatus(`${AI_PROVIDERS[id].label} failed (${err.message}) — trying ${AI_PROVIDERS[order[i + 1]].label}...`);
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+  }
+  throw lastErr;
 }
 
 // ---------------------------------------------------------
@@ -1095,6 +1656,8 @@ async function runBeforeOcr(files) {
   if(!files.length) return;
   const statusEl = document.getElementById("beforeOcrStatus");
   statusEl.textContent = `Analyzing ${files.length} image(s) (before fight)...`;
+  const sess = aiSessionId;
+  const signal = aiAbortController.signal;
   setSaveButtonBusy(true);
 
   try {
@@ -1127,9 +1690,11 @@ async function runBeforeOcr(files) {
       "opponentNameLatin": only if "opponentName" has Japanese/Korean/Chinese/other non-Latin script — give a romanization or short translation; otherwise leave "".
       Leave a field empty/null only if genuinely not visible. Don't invent leagues.`;
       
-      const jsonStr = await callGeminiVision(file, prompt, {
-        onStatus: (msg) => { statusEl.textContent = msg; }
+      const jsonStr = await callAiVision(file, prompt, {
+        signal,
+        onStatus: (msg) => { if(sess === aiSessionId) statusEl.textContent = msg; }
       });
+      if(sess !== aiSessionId) return; // day was closed/switched meanwhile
       const cleanJson = jsonStr.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleanJson);
 
@@ -1200,9 +1765,10 @@ async function runBeforeOcr(files) {
       ? `⚠️ Done, but AI returned ${warnings.join(" and ")} on at least one image — that field was left blank there, please check and enter it manually.`
       : "Done — data and leagues successfully synced!";
   } catch(err) {
+    if(err.name === "AbortError" || sess !== aiSessionId) return;
     statusEl.textContent = "Error: " + err.message;
   } finally {
-    setSaveButtonBusy(false);
+    if(sess === aiSessionId) setSaveButtonBusy(false);
   }
 }
 
@@ -1219,7 +1785,9 @@ document.getElementById("beforeImgUrlBtn").addEventListener("click", async ()=>{
   if(!urls.length) return;
   statusEl.textContent = `Fetching ${urls.length} image(s) from link(s)...`;
   try {
+    const sess = aiSessionId;
     const blobs = await Promise.all(urls.map(urlToImageBlob));
+    if(sess !== aiSessionId) return;
     input.value = "";
     await runBeforeOcr(blobs);
   } catch(err) {
@@ -1233,7 +1801,9 @@ document.getElementById("beforeImgUrlBtn").addEventListener("click", async ()=>{
 async function runAfterOcr(files) {
   if(!files.length) return;
   const statusEl = document.getElementById("afterOcrStatus");
-  statusEl.textContent = `Analyzing ${files.length} image(s) with Gemini AI...`;
+  statusEl.textContent = `Analyzing ${files.length} image(s) with AI...`;
+  const sess = aiSessionId;
+  const signal = aiAbortController.signal;
   setSaveButtonBusy(true);
 
   try {
@@ -1245,9 +1815,17 @@ async function runAfterOcr(files) {
         ? `Known player names from this clan (use these EXACT spellings/capitalizations if a name in the image matches one of these, even approximately — do not "correct" or re-capitalize a name that's already on this list): ${state.players.join(", ")}.`
         : "";
 
-      const prompt = `This is a leaderboard screenshot from the game with player results.
+      const prompt = `This is a clan-war result screenshot from a mobile game. The purple header shows two clans: OUR clan on the LEFT and the opponent on the RIGHT, with a big total score under each (e.g. "8 290" and "0"). Below it, the LEFT column lists OUR clan's players; the right column is the opponent's (often empty).
       ${knownPlayers}
-      Analyze the image and return EXCLUSIVELY a valid JSON object in the following format (without markdown code fences):
+
+      Rules:
+      - "ourFinalScore" = the big total under the LEFT clan; "theirFinalScore" = the big total under the RIGHT clan. Numbers may be grouped with a space ("8 290" means 8290) — return plain integers. If the opponent total is 0 (they did not play), return 0 — never null or empty.
+      - Each player row has: a rank ("1.", "2.", …), a small level number next to the avatar (IGNORE it), a country flag (ignore), the player name, and the score followed by a round "P" coin icon. "score" is ONLY the number next to the P icon.
+      - The FIRST row often shows a golden chest icon instead of a rank number — that row is rank 1.
+      - The list may be cut off at the top or bottom. Only return rows you can read completely; never invent rows.
+      - Only list players from the LEFT (our) column.
+
+      Return EXCLUSIVELY a valid JSON object in this format (no markdown code fences):
       {
         "ourFinalScore": 1234,
         "theirFinalScore": 1000,
@@ -1256,17 +1834,23 @@ async function runAfterOcr(files) {
         ]
       }`;
       
-      const jsonStr = await callGeminiVision(file, prompt, {
-        onStatus: (msg) => { statusEl.textContent = msg; }
+      const jsonStr = await callAiVision(file, prompt, {
+        signal,
+        onStatus: (msg) => { if(sess === aiSessionId) statusEl.textContent = msg; }
       });
+      if(sess !== aiSessionId) return; // day was closed/switched meanwhile
       const cleanJson = jsonStr.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleanJson);
 
-      if(parsed.ourFinalScore && !document.getElementById("ourFinalScore").value){
-        document.getElementById("ourFinalScore").value = parsed.ourFinalScore;
+      // NOTE: 0 is a valid score (opponent didn't play), so don't use a
+      // plain truthiness check here — only skip null/undefined/empty string.
+      const hasScore = (v) => v !== null && v !== undefined && String(v).trim() !== "";
+      const cleanScore = (v) => String(v).replace(/[\s,.]/g, "");
+      if(hasScore(parsed.ourFinalScore) && !document.getElementById("ourFinalScore").value){
+        document.getElementById("ourFinalScore").value = cleanScore(parsed.ourFinalScore);
       }
-      if(parsed.theirFinalScore && !document.getElementById("theirFinalScore").value){
-        document.getElementById("theirFinalScore").value = parsed.theirFinalScore;
+      if(hasScore(parsed.theirFinalScore) && !document.getElementById("theirFinalScore").value){
+        document.getElementById("theirFinalScore").value = cleanScore(parsed.theirFinalScore);
       }
       updateResultPreview();
 
@@ -1280,16 +1864,18 @@ async function runAfterOcr(files) {
           });
           
           if(!exists && r.name && r.rank != null){
-            addPlayerRow(canonicalPlayerName(r.name), r.rank, r.score || "");
+            addPlayerRow(canonicalPlayerName(r.name), r.rank, parseScoreVal(r.score) ?? "");
           }
         });
       }
     }
-    statusEl.textContent = "Done — AI successfully processed all images!";
+    updateResultPreview(); // also refreshes the score check below the players table
+    statusEl.textContent = "Done — AI processed all images. Check the score verification below the players table.";
   } catch(err) {
+    if(err.name === "AbortError" || sess !== aiSessionId) return;
     statusEl.textContent = "Error: " + err.message;
   } finally {
-    setSaveButtonBusy(false);
+    if(sess === aiSessionId) setSaveButtonBusy(false);
   }
 }
 
@@ -1306,7 +1892,9 @@ document.getElementById("afterImgUrlBtn").addEventListener("click", async ()=>{
   if(!urls.length) return;
   statusEl.textContent = `Fetching ${urls.length} image(s) from link(s)...`;
   try {
+    const sess = aiSessionId;
     const blobs = await Promise.all(urls.map(urlToImageBlob));
+    if(sess !== aiSessionId) return;
     input.value = "";
     await runAfterOcr(blobs);
   } catch(err) {
@@ -1320,6 +1908,54 @@ document.getElementById("afterImgUrlBtn").addEventListener("click", async ()=>{
 setupDropZone("beforeDropZone", "beforeImgUrlInput", runBeforeOcr);
 setupDropZone("afterDropZone", "afterImgUrlInput", runAfterOcr);
 
+// ---------------------------------------------------------
+// Admin login UI
+// ---------------------------------------------------------
+(function setupAuthUi(){
+  const loginBtn = document.getElementById("loginBtn");
+  const modal = document.getElementById("loginModal");
+  const form = document.getElementById("loginForm");
+  const msg = document.getElementById("loginMsg");
+  const closeLogin = () => { modal.classList.add("hidden"); document.getElementById("loginPassword").value = ""; msg.textContent = ""; };
+  document.getElementById("closeLogin").addEventListener("click", closeLogin);
+  if(!sb){ loginBtn.style.display = "none"; return; }
+
+  loginBtn.addEventListener("click", async ()=>{
+    if(isAdmin){
+      await sb.auth.signOut();
+      await refreshAdmin();
+      return;
+    }
+    modal.classList.remove("hidden");
+    document.getElementById("loginPassword").focus();
+  });
+  form.addEventListener("submit", async (e)=>{
+    e.preventDefault();
+    const email = ADMIN_EMAIL;
+    const password = document.getElementById("loginPassword").value;
+    msg.textContent = "Signing in…";
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if(error){ msg.textContent = /invalid login/i.test(error.message) ? "Wrong password." : error.message; return; }
+    await refreshAdmin();
+    if(!isAdmin){
+      await sb.auth.signOut();
+      await refreshAdmin();
+      msg.textContent = "This account is not an admin of the clan tracker.";
+      return;
+    }
+    closeLogin();
+  });
+  // (don't await supabase calls directly inside this callback)
+  sb.auth.onAuthStateChange(()=>{ setTimeout(refreshAdmin, 0); });
+})();
+
+renderAiSettings(); // (AI_PROVIDERS is defined further up, so this has to run here)
 renderCalendar();
 renderTables();
 renderPlayersManageList();
+
+// Then: check the admin session and pull the real data from Supabase.
+(async ()=>{
+  await refreshAdmin();
+  await loadFromRemote();
+})();
