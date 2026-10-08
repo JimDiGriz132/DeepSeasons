@@ -330,16 +330,22 @@ async function deleteClan(name){
 }
 
 function renderClanSelect(){
-  const sel = document.getElementById("clanSelect");
-  if(!sel) return;
-  sel.innerHTML = "";
-  Object.keys(clanStore.clans).sort((a,b)=> a.localeCompare(b)).forEach(name=>{
-    const opt = document.createElement("option");
-    opt.value = name;
-    opt.textContent = name;
-    if(name === state.ourClanName) opt.selected = true;
-    sel.appendChild(opt);
+  const names = Object.keys(clanStore.clans).sort((a,b)=> a.localeCompare(b));
+  // Fills both the Settings dropdown and the quick-switch dropdown in the top bar.
+  ["clanSelect","quickClanSelect"].forEach(id=>{
+    const sel = document.getElementById(id);
+    if(!sel) return;
+    sel.innerHTML = "";
+    names.forEach(name=>{
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      if(name === state.ourClanName) opt.selected = true;
+      sel.appendChild(opt);
+    });
   });
+  const quick = document.getElementById("quickClanSelect");
+  if(quick) quick.style.display = names.length > 1 ? "" : "none";
 }
 
 normalizePlayerCasing();
@@ -845,6 +851,9 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
 // SETTINGS
 // ---------------------------------------------------------
 document.getElementById("clanSelect").addEventListener("change", (e)=>{
+  switchClan(e.target.value);
+});
+document.getElementById("quickClanSelect").addEventListener("change", (e)=>{
   switchClan(e.target.value);
 });
 document.getElementById("deleteClanBtn").addEventListener("click", ()=>{

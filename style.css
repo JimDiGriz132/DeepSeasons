@@ -269,3 +269,5 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .settings-box .inline-check{display:flex;gap:8px;align-items:flex-start;font-weight:500;font-size:.82rem;}
 .settings-box .inline-check input{margin-top:3px;}
 .settings-box input[type=password]{width:100%;padding:8px;margin-top:4px;border:1px solid var(--border);border-radius:6px;}
+/* Quick clan switch in top bar */
+.quick-clan-select{padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;font-weight:600;color:var(--text);cursor:pointer;max-width:200px;}
