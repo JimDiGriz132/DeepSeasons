@@ -1865,15 +1865,25 @@ async function runAfterOcr(files) {
 
       if(parsed.rows && Array.isArray(parsed.rows)){
         parsed.rows.forEach(r => {
+          if(!r.name || r.rank == null) return;
           const rows = Array.from(document.querySelectorAll("#playerRows tr"));
-          const exists = rows.some(tr => {
-            const rVal = tr.querySelector(".rankInput").value;
-            const nVal = tr.querySelector(".nameInput").value.trim().toLowerCase();
-            return rVal == r.rank || (r.name && nVal === r.name.toLowerCase());
-          });
-          
-          if(!exists && r.name && r.rank != null){
-            addPlayerRow(canonicalPlayerName(r.name), r.rank, parseScoreVal(r.score) ?? "");
+          const rName = String(r.name).trim().toLowerCase();
+          // Prefer a match by name; fall back to the same rank.
+          const match = rows.find(tr => tr.querySelector(".nameInput").value.trim().toLowerCase() === rName)
+                     || rows.find(tr => tr.querySelector(".rankInput").value == r.rank);
+          const sc = parseScoreVal(r.score);
+
+          if(match){
+            // Row already exists (e.g. day imported from an old JSON that only had ranks):
+            // fill in what's missing instead of skipping it.
+            const scoreInput = match.querySelector(".scoreInput");
+            const rankInput = match.querySelector(".rankInput");
+            const nameInput = match.querySelector(".nameInput");
+            if(sc !== null && scoreInput.value.trim() === "") scoreInput.value = sc;
+            if(rankInput.value === "") rankInput.value = r.rank;
+            if(nameInput.value.trim() === "") nameInput.value = canonicalPlayerName(r.name);
+          } else {
+            addPlayerRow(canonicalPlayerName(r.name), r.rank, sc ?? "");
           }
         });
       }
