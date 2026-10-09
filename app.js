@@ -1723,7 +1723,7 @@ const AI_PROVIDERS = {
   gemini: {
     label: "Google Gemini",
     defaultModel: "gemini-flash-lite-latest",
-    hint: "Free tier available — create a key at aistudio.google.com/apikey.",
+    hint: "Free tier available — create a key at aistudio.google.com/apikey. Tip: in the Model field you can list several models separated by commas (e.g. gemini-flash-lite-latest, gemini-flash-latest) — when one is rate-limited, the next is used automatically, because each model has its own free quota.",
     build(key, model, b64, mime, prompt){
       return {
         url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
@@ -1798,14 +1798,21 @@ function aiErrorMessage(data){
   return typeof e === "string" ? e : (e.message || JSON.stringify(e));
 }
 
+const aiLastModelIdx = {};
 // One provider, with retry + countdown on rate limits / overload / network errors.
 async function callProvider(providerId, file, promptText, { retries = 5, onStatus = null, signal = null } = {}) {
   const prov = AI_PROVIDERS[providerId];
   const apiKey = (state.aiKeys[providerId] || "").trim();
   if (!apiKey) throw new Error(`${prov.label} API key is missing! Add it in Settings.`);
-  const model = (state.aiModels[providerId] || "").trim() || prov.defaultModel;
+  // The model field may hold several models separated by commas: if one is rate-limited,
+  // the next one is tried straight away (each model has its own quota).
+  const models = ((state.aiModels[providerId] || "").split(",").map(x => x.trim()).filter(Boolean));
+  if (!models.length) models.push(prov.defaultModel);
+  let mi = Math.min(aiLastModelIdx[providerId] || 0, models.length - 1);
+  let switches = 0;
   const base64Data = await fileToBase64(file);
-  const req = prov.build(apiKey, model, base64Data, file.type || "image/jpeg", promptText);
+  const makeReq = m => prov.build(apiKey, m, base64Data, file.type || "image/jpeg", promptText);
+  let req = makeReq(models[mi]);
 
   let delay = 5000; // first retry waits 5s, then 10s, 20s, 40s...
 
@@ -1828,7 +1835,17 @@ async function callProvider(providerId, file, promptText, { retries = 5, onStatu
           response.status === 529 || response.status >= 500 ||
           /high demand|quota|overloaded|rate.?limit/i.test(msg);
 
+        if (isRetryable && models.length > 1 && switches < models.length - 1) {
+          switches++;
+          const from = models[mi];
+          mi = (mi + 1) % models.length;
+          req = makeReq(models[mi]);
+          if (onStatus) onStatus(`${from} is rate-limited — switching to ${models[mi]}...`);
+          attempt--; // switching models doesn't use up a retry
+          continue;
+        }
         if (isRetryable && attempt < retries) {
+          switches = 0; // after waiting, every model gets another chance
           console.warn(`${prov.label} busy/rate-limited (attempt ${attempt}/${retries}). Waiting ${(delay/1000).toFixed(0)}s...`);
           await waitWithCountdown(delay, (secLeft) => {
             if (onStatus) onStatus(`${prov.label} is rate-limited — retrying in ${secLeft}s (attempt ${attempt}/${retries})...`);
@@ -1844,6 +1861,7 @@ async function callProvider(providerId, file, promptText, { retries = 5, onStatu
 
       const text = prov.parse(data);
       if (!text) throw new Error(`${prov.label} returned an invalid response.`);
+      aiLastModelIdx[providerId] = mi; // next call starts with the model that just worked
       return text;
 
     } catch (err) {
