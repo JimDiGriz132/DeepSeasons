@@ -92,7 +92,7 @@ main{max-width:1400px;margin:0 auto;padding:20px;}
 .import-label{display:inline-block;}
 
 #tablesContainer{overflow-x:auto;}
-.table-block-wrap{margin-bottom:34px;}
+.table-block-wrap{margin:0 auto 34px;width:fit-content;max-width:100%;}
 .table-block-toolbar{
   display:flex;
   justify-content:flex-end;
@@ -271,3 +271,63 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .settings-box input[type=password]{width:100%;padding:8px;margin-top:4px;border:1px solid var(--border);border-radius:6px;}
 /* Quick clan switch in top bar */
 .quick-clan-select{padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;font-weight:600;color:var(--text);cursor:pointer;max-width:200px;}
+/* ===== DRAW result ===== */
+.cal-day.draw{background:#eceef1;border-color:#9aa1ab;}
+.cal-day.draw .cal-result-badge{background:#9aa1ab;color:#fff;}
+.tracker-table td.result-draw{background:#9aa1ab;color:#fff;font-weight:700;}
+.badge.draw{background:#9aa1ab;color:#fff;}
+
+/* ===== Map & Set (pre-fight) ===== */
+.mapset-block{margin-top:14px;border-top:1px dashed var(--border);padding-top:8px;}
+.mapset-block label{display:block;font-size:.82rem;font-weight:600;margin:8px 0 2px;}
+.mapset-block input{width:100%;padding:7px 8px;border:1px solid var(--border);border-radius:6px;}
+.fish-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 18px;}
+
+/* ===== Analytics tab ===== */
+.an-wrap{max-width:1100px;margin:0 auto;}
+.an-wrap h3{margin:28px 0 8px;}
+.an-filters{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;}
+.an-filters label,.an-h2h-pick{font-weight:600;font-size:.85rem;display:flex;flex-direction:column;gap:3px;}
+.an-filters select,.an-h2h-pick select{padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:#fff;min-width:170px;}
+.an-info{margin-top:8px;}
+.an-missing{text-align:left;margin-top:6px;}
+.an-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:14px;}
+.an-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:12px 14px;}
+.an-card-title{font-size:.75rem;color:var(--gray);font-weight:700;text-transform:uppercase;letter-spacing:.03em;}
+.an-card-val{font-size:1.5rem;font-weight:800;margin:4px 0 2px;}
+.an-card-sub{font-size:.75rem;color:#666;min-height:1em;}
+.an-table-scroll{overflow-x:auto;background:var(--card);border:1px solid var(--border);border-radius:10px;}
+.an-table{border-collapse:collapse;width:100%;font-size:.82rem;}
+.an-table th,.an-table td{padding:7px 10px;text-align:center;white-space:nowrap;border-bottom:1px solid #eceff2;}
+.an-table th{cursor:pointer;user-select:none;background:#f7f8fa;font-size:.75rem;}
+.an-table th:hover{background:#eef1f5;}
+.an-table .left{text-align:left;}
+.an-table td.pos{color:#2f7a12;font-weight:700;}
+.an-table td.neg{color:#c0561a;font-weight:700;}
+.an-table tr.clickable-row{cursor:pointer;}
+.an-table tr.clickable-row:hover td{background:#f3f7ff;}
+.an-svg{width:100%;height:auto;background:var(--card);border:1px solid var(--border);border-radius:10px;}
+.an-legend{font-size:.8rem;margin-top:6px;display:flex;gap:14px;flex-wrap:wrap;}
+.hint-inline{color:var(--gray);}
+.an-summary{margin:10px 0;font-size:.9rem;}
+
+/* ===== Rest months ===== */
+.rest-row{display:flex;justify-content:center;align-items:center;gap:12px;margin-bottom:10px;min-height:24px;}
+.rest-toggle{font-size:.85rem;font-weight:600;display:flex;align-items:center;gap:6px;cursor:pointer;}
+.rest-badge{background:#e8eefc;color:#2c4fa0;border:1px solid #b9c9ef;border-radius:999px;padding:3px 10px;font-size:.78rem;font-weight:700;}
+.rest-badge.hidden{display:none;}
+.calendar-grid.rest-month .cal-day:not(.win):not(.loss):not(.draw):not(.empty){background:#f1f4fb;}
+.an-check{flex-direction:row !important;align-items:center;gap:6px !important;align-self:flex-end;padding-bottom:7px;}
+.an-subtitle{font-size:.82rem;font-weight:700;color:#555;margin:12px 0 6px;}
+
+/* ===== Left-clan flag in players list ===== */
+.players-manage-list{max-height:420px;}
+.player-manage-row .player-meta{font-size:.72rem;color:var(--gray);white-space:nowrap;min-width:120px;}
+.player-manage-row .left-check{display:flex;align-items:center;gap:4px;margin:0;font-size:.78rem;font-weight:600;white-space:nowrap;cursor:pointer;}
+.player-manage-row.is-left input[type=text]{color:#999;text-decoration:line-through;}
+#autoLeftBtn{margin:6px 0;font-size:.8rem;}
+/* wrapping long text columns (e.g. fish sets) so tables never need a horizontal scrollbar */
+.an-table td.wrap{white-space:normal;text-align:left;min-width:200px;max-width:300px;line-height:1.3;}
+
+/* chart hover tooltip */
+.an-tip{position:absolute;pointer-events:none;background:#1f2430;color:#fff;font-size:.78rem;line-height:1.4;padding:6px 10px;border-radius:6px;white-space:nowrap;z-index:5;box-shadow:0 4px 12px rgba(0,0,0,.25);}

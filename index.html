@@ -14,6 +14,7 @@
   <nav class="tabs">
     <button class="tab-btn active" data-tab="calendar">Calendar</button>
     <button class="tab-btn" data-tab="table">Table</button>
+    <button class="tab-btn" data-tab="analytics">Analytics</button>
     <button class="tab-btn" data-tab="settings">Settings</button>
   </nav>
   <div class="auth-box">
@@ -31,6 +32,10 @@
       <h2 id="calMonthLabel">August 2026.</h2>
       <button id="nextMonth">›</button>
     </div>
+    <div class="rest-row">
+      <label class="rest-toggle admin-only"><input type="checkbox" id="restMonthChk"> 😴 Rest month</label>
+      <span id="restBadge" class="rest-badge hidden">😴 Rest month</span>
+    </div>
     <div class="calendar-grid" id="calendarGrid"></div>
     <p class="hint">Click on a day to enter/edit data for that fight. Green = WIN, orange = LOSS, gray = no entry.</p>
   </section>
@@ -40,11 +45,70 @@
     <div class="table-controls centered-controls">
       <button id="prevMonthTable">‹ Previous Month</button>
       <h2 id="tableMonthLabel">August 2026.</h2>
+      <span id="tableRestBadge" class="rest-badge hidden">😴 Rest month</span>
       <button id="nextMonthTable">Next Month ›</button>
       <button id="exportBtn">Export JSON</button>
       <label class="import-label admin-only">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label>
     </div>
     <div id="tablesContainer" class="centered-table-container"></div>
+  </section>
+
+  <!-- ===================== ANALYTICS TAB ===================== -->
+  <section id="tab-analytics" class="tab-panel">
+    <div class="an-wrap">
+      <div class="an-filters">
+        <label>Period
+          <select id="anPeriod">
+            <option value="all">All time</option>
+            <option value="month">This month</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+          </select>
+        </label>
+        <label>Map <select id="anMapFilter"></select></label>
+        <label>Set <select id="anSetFilter"></select></label>
+        <label class="an-check"><input type="checkbox" id="anIncludeRest"> Include rest months</label>
+      </div>
+      <p class="hint an-info" id="anInfo"></p>
+
+      <div id="anCards" class="an-cards"></div>
+
+      <h3>Clan growth</h3>
+      <p class="hint" style="text-align:left">Based on the trophies/position saved in each fight's "Before Fight" (needs no final score). Respects the period and rest-month switch, but not the map/set filters.</p>
+      <p class="an-summary" id="anGrowthSummary"></p>
+      <div class="an-subtitle">Trophies</div>
+      <div id="anGrowthTrophies"></div>
+      <div class="an-subtitle">League position (higher on the chart = better rank)</div>
+      <div id="anGrowthPosition"></div>
+
+      <h3>Score trend</h3>
+      <div id="anTrend"></div>
+
+      <h3>Maps</h3>
+      <div id="anMaps"></div>
+
+      <h3>Sets</h3>
+      <div id="anSets"></div>
+      <p class="hint an-missing" id="anMissing"></p>
+
+      <h3>Consistency</h3>
+      <p class="hint" style="text-align:left">How much our score varies between fights (std dev, and "Variation" = std dev ÷ average). Lower variation = steadier results. Needs 2+ fights; with only 2–3 fights treat it as a rough hint. Click a column to sort.</p>
+      <div class="an-subtitle">By set</div>
+      <div id="anConsSets"></div>
+      <div class="an-subtitle">By map</div>
+      <div id="anConsMaps"></div>
+
+      <h3>Opponents</h3>
+      <div id="anOpponents"></div>
+
+      <h3>Head-to-head</h3>
+      <label class="an-h2h-pick">Opponent <select id="anOppSelect"></select></label>
+      <div id="anH2H"></div>
+
+      <h3>Players</h3>
+      <p class="hint" style="text-align:left">Uses the filters above — e.g. pick a set to see who scores best on it.</p>
+      <div id="anPlayers"></div>
+    </div>
   </section>
 
   <!-- ===================== SETTINGS TAB ===================== -->
@@ -84,6 +148,8 @@
 
       <h3>Known Players</h3>
       <p class="hint">This is the canonical spelling for each player — it's what the AI is told to match screenshot names against, and it controls which rows appear in the Table tab. Rename a player here to fix a name everywhere at once; two names typed the same way (ignoring case) get merged automatically.</p>
+      <p class="hint">Tick <b>Left clan</b> for people who are no longer in the clan: their old results stay, but they no longer get an empty row in months where they didn't play. Members who are still in the clan but don't play: just leave them unticked and they keep their row.</p>
+      <button id="autoLeftBtn" class="secondary admin-only">Auto-mark players with no fights in the last 30 days as "left"</button>
       <div id="playersManageList" class="players-manage-list"></div>
       <div class="add-player-row admin-only">
         <input type="text" id="newPlayerNameInput" placeholder="New player name">
@@ -116,7 +182,7 @@
         <legend>Before Fight</legend>
         <div class="upload-row admin-only">
           <label class="upload-btn">
-            📷 Upload pre-fight screenshot(s) (standings, opponent)
+            📷 Upload pre-fight screenshot(s) (standings, opponent, map &amp; set)
             <input type="file" id="beforeImgInput" accept="image/*" multiple hidden>
           </label>
         </div>
@@ -157,6 +223,18 @@
               </select>
             </label>
           </div>
+        </div>
+        <div class="mapset-block">
+          <h4>Map &amp; Set</h4>
+          <label>Map <input type="text" id="mapName" list="knownMapsList" placeholder="e.g. Great Lakes"></label>
+          <div class="fish-grid">
+            <label>Fish 1 <input type="text" class="fishInput" id="fish1" list="knownFishList"></label>
+            <label>Fish 2 <input type="text" class="fishInput" id="fish2" list="knownFishList"></label>
+            <label>Fish 3 <input type="text" class="fishInput" id="fish3" list="knownFishList"></label>
+            <label>Fish 4 <input type="text" class="fishInput" id="fish4" list="knownFishList"></label>
+          </div>
+          <datalist id="knownMapsList"></datalist>
+          <datalist id="knownFishList"></datalist>
         </div>
       </fieldset>
 

@@ -83,6 +83,37 @@ let state = {
   fights: clanStore.clans[clanStore.activeClan].fights
 };
 
+// Months marked as "rest month" for the ACTIVE clan, as ["2026-10", ...].
+// Stored on the clan object itself, so switching clans / reloading from the
+// database needs no extra wiring.
+Object.defineProperty(state, "restMonths", {
+  get(){
+    const c = clanStore.clans[state.ourClanName];
+    if(!c) return [];
+    if(!Array.isArray(c.restMonths)) c.restMonths = [];
+    return c.restMonths;
+  },
+  set(v){ if(clanStore.clans[state.ourClanName]) clanStore.clans[state.ourClanName].restMonths = v; }
+});
+
+// Players who LEFT the clan (names). They stay in the known-players list so their
+// old results keep showing in the months they played, but they no longer get an
+// empty row in months where they have no data. In-clan-but-idle players are
+// simply NOT on this list, so they keep their row.
+Object.defineProperty(state, "leftPlayers", {
+  get(){
+    const c = clanStore.clans[state.ourClanName];
+    if(!c) return [];
+    if(!Array.isArray(c.leftPlayers)) c.leftPlayers = [];
+    return c.leftPlayers;
+  },
+  set(v){ if(clanStore.clans[state.ourClanName]) clanStore.clans[state.ourClanName].leftPlayers = v; }
+});
+function hasLeft(name){
+  const n = String(name).toLowerCase();
+  return state.leftPlayers.some(x => String(x).toLowerCase() === n);
+}
+
 function saveData(){
   clanStore.activeClan = state.ourClanName;
   clanStore.geminiApiKey = state.aiKeys.gemini || ""; // kept for older saves
@@ -90,7 +121,7 @@ function saveData(){
   clanStore.aiKeys = state.aiKeys;
   clanStore.aiModels = state.aiModels;
   clanStore.aiFallback = state.aiFallback;
-  clanStore.clans[state.ourClanName] = { players: state.players, fights: state.fights };
+  clanStore.clans[state.ourClanName] = { players: state.players, fights: state.fights, restMonths: state.restMonths, leftPlayers: state.leftPlayers };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(clanStore));
 }
 
@@ -110,12 +141,41 @@ function requireAdminRemote(){
   if(!isAdmin) throw new Error("Not logged in as admin.");
   return true;
 }
+const missingClanCols = new Set(); // optional cw_clans columns that don't exist in the DB yet
+async function remoteSaveClanCol(clan, col, value, label){
+  if(!requireAdminRemote()) return;
+  const { error } = await sb.from("cw_clans").update({ [col]: value }).eq("name", clan);
+  if(error){
+    if(new RegExp(col, "i").test(error.message || "")){
+      missingClanCols.add(col);
+      throw new Error(`the ${col} column doesn't exist in Supabase yet, so ${label} is saved only in this browser — run the SQL snippet to add it`);
+    }
+    throw error;
+  }
+}
+function remoteSaveRestMonths(clan, v){ return remoteSaveClanCol(clan, "rest_months", v, "rest months"); }
+function remoteSaveLeftPlayers(clan, v){ return remoteSaveClanCol(clan, "left_players", v, "the left-clan list"); }
 async function remoteLoadAll(){
-  const clansRes = await sb.from("cw_clans").select("name,players");
+  const optional = ["rest_months", "left_players"];
+  let clansRes;
+  for(let attempt = 0; attempt <= optional.length; attempt++){
+    const cols = ["name", "players", ...optional.filter(c => !missingClanCols.has(c))].join(",");
+    clansRes = await sb.from("cw_clans").select(cols);
+    if(!clansRes.error) break;
+    // An optional column isn't created yet — drop it and retry; that data stays local for now.
+    const bad = optional.find(c => !missingClanCols.has(c) && new RegExp(c, "i").test(clansRes.error.message || ""));
+    if(!bad) break;
+    missingClanCols.add(bad);
+  }
   if(clansRes.error) throw clansRes.error;
   const clans = {};
   (clansRes.data || []).forEach(r => {
-    clans[r.name] = { players: Array.isArray(r.players) ? r.players : [], fights: {} };
+    clans[r.name] = {
+      players: Array.isArray(r.players) ? r.players : [],
+      fights: {},
+      restMonths: Array.isArray(r.rest_months) ? r.rest_months : [],
+      leftPlayers: Array.isArray(r.left_players) ? r.left_players : []
+    };
   });
   // PostgREST returns max 1000 rows per request, so page through.
   const PAGE = 1000;
@@ -166,6 +226,12 @@ async function remoteSyncClan(clan, data, { prune = false } = {}){
   if(!requireAdminRemote()) return;
   await remoteSavePlayers(clan, data.players);
   await remoteUpsertFights(clan, data.fights);
+  if(Array.isArray(data.restMonths) && data.restMonths.length){
+    try{ await remoteSaveRestMonths(clan, data.restMonths); }catch(e){ console.warn(e); }
+  }
+  if(Array.isArray(data.leftPlayers) && data.leftPlayers.length){
+    try{ await remoteSaveLeftPlayers(clan, data.leftPlayers); }catch(e){ console.warn(e); }
+  }
   if(prune){
     const { data: remoteKeys, error } = await sb.from("cw_fights").select("date_key").eq("clan", clan);
     if(error) throw error;
@@ -218,6 +284,12 @@ async function loadFromRemote(){
       }
     }catch(e){}
     const prevActive = state.ourClanName;
+    Object.keys(remoteClans).forEach(n => {
+      const old = clanStore.clans[n];
+      if(!old) return;
+      if(missingClanCols.has("rest_months") && Array.isArray(old.restMonths)) remoteClans[n].restMonths = old.restMonths;
+      if(missingClanCols.has("left_players") && Array.isArray(old.leftPlayers)) remoteClans[n].leftPlayers = old.leftPlayers;
+    });
     clanStore.clans = remoteClans;
     const active = remoteClans[prevActive] ? prevActive : names.sort((a,b)=> a.localeCompare(b))[0];
     state.ourClanName = active;
@@ -453,6 +525,7 @@ document.querySelectorAll(".tab-btn").forEach(btn=>{
     document.getElementById("tab-"+btn.dataset.tab).classList.add("active");
     if(btn.dataset.tab === "table") renderTables();
     if(btn.dataset.tab === "calendar") renderCalendar();
+    if(btn.dataset.tab === "analytics") renderAnalytics();
     if(btn.dataset.tab === "settings") renderPlayersManageList();
   });
 });
@@ -473,7 +546,32 @@ document.getElementById("nextMonth").addEventListener("click", ()=>{
   renderCalendar();
 });
 
+function restMonthKey(y, m){ return `${y}-${String(m + 1).padStart(2, "0")}`; }
+function renderRestUi(){
+  const calRest = state.restMonths.includes(restMonthKey(calYear, calMonth));
+  const chk = document.getElementById("restMonthChk");
+  if(chk) chk.checked = calRest;
+  const badge = document.getElementById("restBadge");
+  if(badge) badge.classList.toggle("hidden", !calRest);
+  const grid = document.getElementById("calendarGrid");
+  if(grid) grid.classList.toggle("rest-month", calRest);
+  const tBadge = document.getElementById("tableRestBadge");
+  if(tBadge) tBadge.classList.toggle("hidden", !state.restMonths.includes(restMonthKey(tableYear, tableMonth)));
+}
+document.getElementById("restMonthChk").addEventListener("change", (e)=>{
+  if(!isAdmin){ e.target.checked = !e.target.checked; return; }
+  const set = new Set(state.restMonths);
+  const key = restMonthKey(calYear, calMonth);
+  if(e.target.checked) set.add(key); else set.delete(key);
+  state.restMonths = [...set].sort();
+  saveData();
+  renderRestUi();
+  renderAnalyticsIfActive();
+  if(sb) bgSync(() => remoteSaveRestMonths(state.ourClanName, state.restMonths));
+});
+
 function renderCalendar(){
+  renderRestUi();
   document.getElementById("calMonthLabel").textContent = `${MONTHS[calMonth]} ${calYear}.`;
   const grid = document.getElementById("calendarGrid");
   grid.innerHTML = "";
@@ -535,7 +633,9 @@ function renderCalendar(){
 function computeResult(fight){
   if(fight.ourFinalScore != null && fight.theirFinalScore != null &&
      fight.ourFinalScore !== "" && fight.theirFinalScore !== ""){
-    return Number(fight.ourFinalScore) >= Number(fight.theirFinalScore) ? "WIN" : "LOSS";
+    const o = parseScoreVal(fight.ourFinalScore), t = parseScoreVal(fight.theirFinalScore);
+    if(o == null || t == null) return null;
+    return o > t ? "WIN" : (o < t ? "LOSS" : "DRAW");
   }
   return null;
 }
@@ -556,6 +656,8 @@ document.getElementById("nextMonthTable").addEventListener("click", ()=>{
 });
 
 function renderTables(){
+  renderAnalyticsIfActive();
+  renderRestUi();
   document.getElementById("tableMonthLabel").textContent = `${MONTHS[tableMonth]} ${tableYear}.`;
   const container = document.getElementById("tablesContainer");
   container.innerHTML = "";
@@ -593,6 +695,17 @@ function renderTables(){
 const TABLE_FIRST_COL_WIDTH = 110;
 const TABLE_DAY_COL_WIDTH = 60;
 
+// Earliest fight date key (YYYY-MM-DD) in which each player appears.
+function getPlayerFirstSeen(){
+  const first = {};
+  Object.keys(state.fights).sort().forEach(key=>{
+    const f = state.fights[key];
+    if(!f || !f.playerRanks) return;
+    Object.keys(f.playerRanks).forEach(p=>{ if(!(p in first)) first[p] = key; });
+  });
+  return first;
+}
+
 function buildTableBlock(container, title, days){
   const wrap = document.createElement("div");
   wrap.className = "table-block-wrap";
@@ -629,7 +742,7 @@ function buildTableBlock(container, title, days){
   fights.forEach((f,i)=>{
     const res = computeResult(f);
     const td = document.createElement("td");
-    td.className = "clickable " + (res==="WIN"?"result-win":res==="LOSS"?"result-loss":"");
+    td.className = "clickable " + (res==="WIN"?"result-win":res==="LOSS"?"result-loss":res==="DRAW"?"result-draw":"");
     td.textContent = res || "—";
     td.addEventListener("click", ()=>{
       const [y,m,d] = dayKeys[i].split("-").map(Number);
@@ -667,7 +780,22 @@ function buildTableBlock(container, title, days){
     return `${f.ourFinalScore}--${f.theirFinalScore}`;
   }));
 
-  const sortedPlayers = [...state.players].sort((a,b)=> a.localeCompare(b));
+  // A player only gets a row from the block in which they first appeared onward
+  // (never in earlier blocks). Players who left the clan additionally lose the
+  // row in blocks where they didn't play. Players who have never played get a
+  // row only in the most recent block.
+  const playedHere = player => fights.some(f => f.playerRanks && Object.prototype.hasOwnProperty.call(f.playerRanks, player));
+  const firstSeen = getPlayerFirstSeen();
+  const blockLastKey = dayKeys[dayKeys.length - 1];
+  const latestKey = Object.keys(state.fights).sort().pop() || "";
+  const sortedPlayers = [...state.players]
+    .filter(p => {
+      if(playedHere(p)) return true;
+      if(hasLeft(p)) return false;
+      const first = firstSeen[p];
+      return first ? first <= blockLastKey : blockLastKey >= latestKey;
+    })
+    .sort((a,b)=> a.localeCompare(b));
   sortedPlayers.forEach(player=>{
     const tr = document.createElement("tr");
     const nameTd = document.createElement("td");
@@ -792,7 +920,9 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
             const cur = clanStore.clans[name];
             const data = {
               players: unionPlayers(cur ? cur.players : [], c.players || []),
-              fights: Object.assign({}, cur ? cur.fights : {}, c.fights || {})
+              fights: Object.assign({}, cur ? cur.fights : {}, c.fights || {}),
+              restMonths: [...new Set([...(cur && cur.restMonths || []), ...(c.restMonths || [])])].sort(),
+              leftPlayers: [...new Set([...(cur && cur.leftPlayers || []), ...(c.leftPlayers || [])])]
             };
             await remoteSyncClan(name, data);
           }
@@ -974,15 +1104,43 @@ function renderPlayersManageList(){
     container.appendChild(p);
     return;
   }
+  // last played date + number of fights per player (helps to spot who left)
+  const MS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const info = {};
+  Object.entries(state.fights).forEach(([key, f])=>{
+    Object.keys((f && f.playerRanks) || {}).forEach(n=>{
+      const i = info[n] || (info[n] = { last: "", n: 0 });
+      i.n++;
+      if(key > i.last) i.last = key;
+    });
+  });
+  const fmt = k => { const [y,m,d] = k.split("-").map(Number); return `${d} ${MS[m-1]} ${y}`; };
+
   sorted.forEach(name=>{
+    const left = hasLeft(name);
     const row = document.createElement("div");
-    row.className = "player-manage-row";
+    row.className = "player-manage-row" + (left ? " is-left" : "");
 
     const input = document.createElement("input");
     input.type = "text";
     input.value = name;
     input.disabled = !isAdmin;
     input.addEventListener("change", ()=> renamePlayer(name, input.value));
+
+    const meta = document.createElement("span");
+    meta.className = "player-meta";
+    const i = info[name];
+    meta.textContent = i ? `last: ${fmt(i.last)} · ${i.n}×` : "never played";
+
+    const leftLbl = document.createElement("label");
+    leftLbl.className = "left-check admin-only";
+    leftLbl.title = "Tick if this person left the clan: they stay in old months where they played, but get no empty row in months they didn't play. Leave unticked for members who are in the clan but idle.";
+    const chk = document.createElement("input");
+    chk.type = "checkbox";
+    chk.checked = left;
+    chk.addEventListener("change", ()=> setPlayerLeft(name, chk.checked));
+    leftLbl.appendChild(chk);
+    leftLbl.appendChild(document.createTextNode(" Left clan"));
 
     const delBtn = document.createElement("button");
     delBtn.className = "row-del admin-only";
@@ -991,9 +1149,25 @@ function renderPlayersManageList(){
     delBtn.addEventListener("click", ()=> deletePlayer(name));
 
     row.appendChild(input);
+    row.appendChild(meta);
+    row.appendChild(leftLbl);
     row.appendChild(delBtn);
     container.appendChild(row);
   });
+}
+
+function setPlayerLeft(name, isLeft){
+  if(!isAdmin) return;
+  const n = name.toLowerCase();
+  const rest = state.leftPlayers.filter(x => String(x).toLowerCase() !== n);
+  state.leftPlayers = isLeft ? [...rest, name] : rest;
+  saveData();
+  renderPlayersManageList();
+  renderTables();
+  if(sb){
+    const clan = state.ourClanName, list = [...state.leftPlayers];
+    bgSync(() => remoteSaveLeftPlayers(clan, list));
+  }
 }
 
 // Renames a player everywhere: the roster AND every saved fight's
@@ -1014,6 +1188,9 @@ function renamePlayer(oldName, newNameRaw){
   if(!state.players.some(p => p.toLowerCase() === targetName.toLowerCase())){
     state.players.push(targetName);
   }
+  const wasLeft = hasLeft(oldName);
+  state.leftPlayers = state.leftPlayers.filter(x => String(x).toLowerCase() !== oldName.toLowerCase());
+  if(wasLeft && !hasLeft(targetName)) state.leftPlayers = [...state.leftPlayers, targetName];
 
   const changedKeys = [];
   Object.entries(state.fights).forEach(([key, f])=>{
@@ -1044,6 +1221,7 @@ function renamePlayer(oldName, newNameRaw){
   bgSync(async ()=>{
     await remoteSavePlayers(clan, players);
     await remoteUpsertFights(clan, changed);
+    if(wasLeft) await remoteSaveLeftPlayers(clan, [...state.leftPlayers]);
   });
 }
 
@@ -1113,6 +1291,55 @@ function setSaveButtonBusy(busy, reset=false){
   btn.classList.toggle("is-loading", isBusy);
 }
 
+// ---------------------------------------------------------
+// Map & fish set helpers. No predefined list is needed: names are read by
+// the AI and then snapped (case-insensitively) to a spelling that already
+// exists in saved fights of ANY clan, so the same map/fish always ends up
+// spelled identically — which is what later analytics (per map / set /
+// opponent) will group by.
+// ---------------------------------------------------------
+// "great LAKES" / "GREAT LAKES" -> "Great Lakes"
+function titleCase(s){
+  return String(s || "").trim().replace(/\s+/g, " ").toLowerCase()
+    .replace(/(^|[\s\-(])(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+}
+function collectKnownMapsAndFish(){
+  const maps = new Map(), fish = new Map(); // lowercase -> Title Case
+  Object.values(clanStore.clans || {}).forEach(cl => {
+    Object.values((cl && cl.fights) || {}).forEach(f => {
+      if(!f) return;
+      const mp = titleCase(f.mapName);
+      if(mp && !maps.has(mp.toLowerCase())) maps.set(mp.toLowerCase(), mp);
+      (f.fishSet || []).forEach(n => {
+        const fn = titleCase(n);
+        if(fn && !fish.has(fn.toLowerCase())) fish.set(fn.toLowerCase(), fn);
+      });
+    });
+  });
+  return { maps, fish };
+}
+// Map and fish names are always stored in Title Case so the same name always groups together.
+function canonicalName(raw){
+  return titleCase(raw);
+}
+function refreshMapSetSuggestions(){
+  const { maps, fish } = collectKnownMapsAndFish();
+  const fill = (id, m) => {
+    const dl = document.getElementById(id);
+    dl.innerHTML = [...m.values()].sort().map(v => `<option value="${escapeHtml(v)}"></option>`).join("");
+  };
+  fill("knownMapsList", maps);
+  fill("knownFishList", fish);
+}
+function readMapSetFromInputs(){
+  const { maps, fish } = collectKnownMapsAndFish();
+  const mapName = canonicalName(document.getElementById("mapName").value, maps);
+  const fishSet = [1,2,3,4]
+    .map(i => canonicalName(document.getElementById("fish"+i).value, fish))
+    .filter(Boolean);
+  return { mapName, fishSet };
+}
+
 function openEditor(y, m, d){
   cancelAiSession();
   editorKey = dateKey(y,m,d);
@@ -1121,6 +1348,7 @@ function openEditor(y, m, d){
     opponentName:"", ourTrophies:"", ourPosition:"", ourLeague:"Warm-up",
     oppTrophies:"", oppPosition:"", oppLeague:"Warm-up",
     ourFinalScore:"", theirFinalScore:"",
+    mapName:"", fishSet:[],
     playerRanks:{}, playerScores:{}
   };
 
@@ -1137,6 +1365,10 @@ function openEditor(y, m, d){
   document.getElementById("ourFinalScore").value = editorFight.ourFinalScore ?? "";
   document.getElementById("theirFinalScore").value = editorFight.theirFinalScore ?? "";
   
+  document.getElementById("mapName").value = titleCase(editorFight.mapName);
+  for(let i=1;i<=4;i++) document.getElementById("fish"+i).value = titleCase((editorFight.fishSet || [])[i-1]);
+  refreshMapSetSuggestions();
+
   document.getElementById("beforeOcrStatus").textContent = "";
   document.getElementById("afterOcrStatus").textContent = "";
 
@@ -1200,9 +1432,15 @@ function updateResultPreview(){
     el.textContent = "—";
     el.className = "badge";
   } else {
-    const win = Number(our) >= Number(their);
-    el.textContent = win ? "WIN" : "LOSS";
-    el.className = "badge " + (win ? "win" : "loss");
+    const o = parseScoreVal(our), t = parseScoreVal(their);
+    if(o == null || t == null){
+      el.textContent = "—";
+      el.className = "badge";
+    } else {
+      const res = o > t ? "WIN" : (o < t ? "LOSS" : "DRAW");
+      el.textContent = res;
+      el.className = "badge " + res.toLowerCase();
+    }
   }
   updateScoreCheck();
 }
@@ -1276,6 +1514,7 @@ document.getElementById("saveFightBtn").addEventListener("click", async ()=>{
     playerRanks: {},
     playerScores: {}
   };
+  Object.assign(fight, readMapSetFromInputs()); // mapName + fishSet
   const playersAfter = [...state.players];
   document.querySelectorAll("#playerRows tr").forEach(tr=>{
     const rawName = tr.querySelector(".nameInput").value.trim();
@@ -1679,7 +1918,9 @@ async function runBeforeOcr(files) {
       const ourName = (state.ourClanName || "our clan").trim();
       const prompt = `These are pre-fight screenshot(s) from Creatures of the Deep clan war. Our clan's name is literally "${ourName}".
 
-      TWO kinds of info blocks appear:
+      The image may ALSO be a map/set screenshot instead of a standings screenshot: it shows the name of the fishing MAP (e.g. "Great Lakes") and the SET of exactly 4 fish names for that map. If so, fill "mapName" and "fishSet" (the 4 fish names exactly as printed, in the order shown, left-to-right/top-to-bottom). A map/set popup has the map name as a title in a purple header and the text "TOURNAMENT FISH!" with 4 fish below; the dimmed background behind it is NOT relevant — for such an image leave ALL other fields null/empty (ourTrophies, ourPosition, opponentName, oppTrophies, oppPosition) and ignore the "#---" next to the trophy icon and the timer. If the image has no map/fish info, set "mapName" to "" and "fishSet" to []. Never invent fish names.
+
+      Otherwise TWO kinds of info blocks appear:
       1. Our OWN status header: unlabeled (no clan name/logo), just a league name, "#position", and a trophy number next to a cup icon. Always belongs to "${ourName}".
       2. A clan card/popup (e.g. opened by tapping a clan): has that clan's short name and logo. If the name matches "${ourName}" it's ours; otherwise it's the opponent's — read "opponentName" from it.
 
@@ -1694,7 +1935,9 @@ async function runBeforeOcr(files) {
         "opponentName": "example clan name",
         "opponentNameLatin": "",
         "oppTrophies": 72,
-        "oppPosition": 21
+        "oppPosition": 21,
+        "mapName": "",
+        "fishSet": []
       }
       "opponentNameLatin": only if "opponentName" has Japanese/Korean/Chinese/other non-Latin script — give a romanization or short translation; otherwise leave "".
       Leave a field empty/null only if genuinely not visible. Don't invent leagues.`;
@@ -1706,6 +1949,22 @@ async function runBeforeOcr(files) {
       if(sess !== aiSessionId) return; // day was closed/switched meanwhile
       const cleanJson = jsonStr.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleanJson);
+
+      // Map & fish set. If this image is a map/set popup, apply ONLY that and
+      // skip the standings fields: the blurred background of that popup shows
+      // fragments of other screens (league, numbers) that must not be read.
+      {
+        const { maps, fish } = collectKnownMapsAndFish();
+        const mapRaw = typeof parsed.mapName === "string" ? parsed.mapName : "";
+        const names = Array.isArray(parsed.fishSet)
+          ? parsed.fishSet.map(n => canonicalName(n, fish)).filter(Boolean).slice(0, 4)
+          : [];
+        if(mapRaw.trim()) document.getElementById("mapName").value = canonicalName(mapRaw, maps);
+        if(names.length){
+          for(let k=1;k<=4;k++) document.getElementById("fish"+k).value = names[k-1] || "";
+        }
+        if(mapRaw.trim() && names.length) continue;
+      }
 
       // Sanity check: trophy counts in this game never realistically reach
       // 4 digits. If the AI still grabbed the pink gem/currency number
@@ -1969,6 +2228,566 @@ setupDropZone("afterDropZone", "afterImgUrlInput", runAfterOcr);
 })();
 
 renderAiSettings(); // (AI_PROVIDERS is defined further up, so this has to run here)
+// Marks everyone with no fight in the last 30 days (or who never played) as "left clan".
+// Shows the list first so idle-but-still-in-clan members can be spared by cancelling
+// and un-ticking them afterwards.
+document.getElementById("autoLeftBtn").addEventListener("click", ()=>{
+  if(!isAdmin) return;
+  const last = {};
+  Object.entries(state.fights).forEach(([key, f])=>{
+    Object.keys((f && f.playerRanks) || {}).forEach(n => { if(!last[n] || key > last[n]) last[n] = key; });
+  });
+  const lim = new Date(); lim.setDate(lim.getDate() - 30);
+  const limKey = dateKey(lim.getFullYear(), lim.getMonth(), lim.getDate());
+  const cand = state.players.filter(p => !hasLeft(p) && (!last[p] || last[p] < limKey)).sort((a,b)=> a.localeCompare(b));
+  if(!cand.length){ alert("Everyone has played within the last 30 days (or is already marked as left)."); return; }
+  if(!confirm(`Mark these ${cand.length} player(s) as "Left clan"?\n\n${cand.join(", ")}\n\n(They keep their old results. Members who are still in the clan but idle can be un-ticked afterwards in the list.)`)) return;
+  state.leftPlayers = [...state.leftPlayers, ...cand];
+  saveData();
+  renderPlayersManageList();
+  renderTables();
+  if(sb){
+    const clan = state.ourClanName, list = [...state.leftPlayers];
+    bgSync(() => remoteSaveLeftPlayers(clan, list));
+  }
+});
+
+// ---------------------------------------------------------
+// ANALYTICS TAB
+// Computed on the fly from state.fights of the active clan.
+// Score-based sections need BOTH final scores. A "set" belongs to exactly
+// one map (setKey = map + sorted fish). Rest months are left out unless the
+// "Include rest months" switch is on.
+// ---------------------------------------------------------
+const anSort = {};
+const anMonthsShort = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const anFmtN = n => (n == null || isNaN(n)) ? "—" : Math.round(n).toLocaleString("en-US").replace(/,/g, " ");
+const anFmtSigned = n => (n == null || isNaN(n)) ? "—" : (n > 0 ? "+" : n < 0 ? "−" : "") + anFmtN(Math.abs(n));
+const anPct = n => (n == null || isNaN(n)) ? "—" : Math.round(n) + "%";
+const anFmtDate = d => d ? `${d.getDate()} ${anMonthsShort[d.getMonth()]} ${d.getFullYear()}` : "—";
+const anEl = id => document.getElementById(id);
+
+function anCollectRaw(){
+  const out = [];
+  const rest = new Set(state.restMonths || []);
+  Object.entries(state.fights || {}).forEach(([key, f]) => {
+    if(!f) return;
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+    if(!m) return;
+    const date = new Date(+m[1], +m[2] - 1, +m[3]);
+    const our = parseScoreVal(f.ourFinalScore), their = parseScoreVal(f.theirFinalScore);
+    const scored = our != null && their != null;
+    const map = titleCase(f.mapName);
+    const fish = (f.fishSet || []).map(titleCase).filter(Boolean)
+      .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    out.push({
+      key, date, monthKey: key.slice(0, 7), isRest: rest.has(key.slice(0, 7)),
+      scored, our, their,
+      res: !scored ? null : our > their ? "WIN" : our < their ? "LOSS" : "DRAW",
+      opp: (f.opponentName || "").trim(),
+      map,
+      setKey: fish.length ? map.toLowerCase() + "||" + fish.map(x => x.toLowerCase()).join("|") : "",
+      setLabel: fish.join(" · "),
+      trophies: parseScoreVal(f.ourTrophies),
+      position: parseScoreVal(f.ourPosition),
+      league: f.ourLeague || "",
+      playerScores: f.playerScores || {},
+      playerRanks: f.playerRanks || {}
+    });
+  });
+  out.sort((a, b) => a.date - b.date);
+  return out;
+}
+
+function anStd(vals){
+  const n = vals.length;
+  if(n < 2) return null;
+  const mean = vals.reduce((s, v) => s + v, 0) / n;
+  return Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / (n - 1));
+}
+
+function anAgg(list){
+  const n = list.length;
+  const cnt = r => list.filter(x => x.res === r).length;
+  const w = cnt("WIN"), d = cnt("DRAW"), l = cnt("LOSS");
+  const sumOur = list.reduce((s, x) => s + x.our, 0);
+  const sumTheir = list.reduce((s, x) => s + x.their, 0);
+  let best = null;
+  list.forEach(x => { if(!best || x.our > best.our) best = x; });
+  const ours = list.map(x => x.our);
+  const std = anStd(ours);
+  const avgOur = n ? sumOur / n : null;
+  return {
+    n, w, d, l,
+    record: `${w}-${d}-${l}`,
+    winPct: n ? w / n * 100 : null,
+    avgOur,
+    avgTheir: n ? sumTheir / n : null,
+    avgMargin: n ? (sumOur - sumTheir) / n : null,
+    best: best ? best.our : null,
+    bestDate: best ? best.date : null,
+    bestOpp: best ? best.opp : "",
+    min: n ? Math.min(...ours) : null,
+    std,
+    cv: (std != null && avgOur) ? std / avgOur * 100 : null,
+    last: n ? list[n - 1].date : null
+  };
+}
+
+function anGroup(list, keyFn){
+  const m = new Map();
+  list.forEach(x => {
+    const k = keyFn(x);
+    if(!k) return;
+    if(!m.has(k)) m.set(k, []);
+    m.get(k).push(x);
+  });
+  return m;
+}
+
+function anOpt(v, l){ return `<option value="${escapeHtml(v)}">${escapeHtml(l)}</option>`; }
+
+// Generic sortable table. cols: {k, label, f?(row) -> text, cls?(row), left?}
+function anTable(el, id, cols, rows, defKey, defDir, onRow){
+  if(!rows.length){ el.innerHTML = '<p class="hint">No data yet.</p>'; return; }
+  const st = anSort[id] || (anSort[id] = { key: defKey, dir: defDir });
+  const sorted = [...rows].sort((a, b) => {
+    const x = a[st.key], y = b[st.key];
+    if(x == null && y == null) return 0;
+    if(x == null) return 1;
+    if(y == null) return -1;
+    const c = (x instanceof Date && y instanceof Date) ? x - y
+      : (typeof x === "number" && typeof y === "number") ? x - y
+      : String(x).localeCompare(String(y));
+    return st.dir === "asc" ? c : -c;
+  });
+  const arrow = k => st.key === k ? (st.dir === "asc" ? " ▲" : " ▼") : "";
+  const head = cols.map(c => `<th data-k="${c.k}" class="${c.left ? "left" : ""}">${escapeHtml(c.label)}${arrow(c.k)}</th>`).join("");
+  const body = sorted.map((r, i) => {
+    const tds = cols.map(c => {
+      const v = c.f ? c.f(r) : (r[c.k] == null || r[c.k] === "" ? "—" : r[c.k]);
+      const cls = (c.left ? "left " : "") + (c.wrap ? "wrap " : "") + (c.cls ? c.cls(r) : "");
+      return `<td class="${cls}">${escapeHtml(String(v))}</td>`;
+    }).join("");
+    return `<tr data-i="${i}" class="${onRow ? "clickable-row" : ""}">${tds}</tr>`;
+  }).join("");
+  el.innerHTML = `<div class="an-table-scroll"><table class="an-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+  el.querySelectorAll("th[data-k]").forEach(th => th.addEventListener("click", () => {
+    const k = th.dataset.k;
+    st.dir = (st.key === k && st.dir === "desc") ? "asc" : "desc";
+    st.key = k;
+    anTable(el, id, cols, rows, defKey, defDir, onRow);
+  }));
+  if(onRow) el.querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", () => onRow(sorted[Number(tr.dataset.i)])));
+}
+
+const anStatCols = (firstKey, firstLabel) => [
+  { k: firstKey, label: firstLabel, left: true, wrap: firstKey === "set" },
+  { k: "n", label: "Fights" },
+  { k: "winPct", label: "W-D-L / Win %", f: r => `${r.record}  (${anPct(r.winPct)})` },
+  { k: "avgOur", label: "Avg our", f: r => anFmtN(r.avgOur) },
+  { k: "best", label: "Record", f: r => anFmtN(r.best) + (r.bestDate ? ` (${anFmtDate(r.bestDate)})` : "") },
+  { k: "avgTheir", label: "Avg their", f: r => anFmtN(r.avgTheir) },
+  { k: "avgMargin", label: "Avg margin", f: r => anFmtSigned(r.avgMargin), cls: r => r.avgMargin > 0 ? "pos" : r.avgMargin < 0 ? "neg" : "" }
+];
+
+// ---- filters -------------------------------------------------------------
+function anFiltered(){
+  const includeRest = anEl("anIncludeRest").checked;
+  const raw = anCollectRaw();
+  const restExcluded = includeRest ? 0 : raw.filter(x => x.isRest).length;
+  const base = includeRest ? raw : raw.filter(x => !x.isRest);
+
+  const period = anEl("anPeriod").value;
+  const now = new Date();
+  let from = null;
+  if(period === "30" || period === "90") from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - Number(period));
+  if(period === "month") from = new Date(now.getFullYear(), now.getMonth(), 1);
+  const inPeriod = base.filter(x => !from || x.date >= from);
+  const scoredPeriod = inPeriod.filter(x => x.scored);
+
+  // map dropdown
+  const mapSel = anEl("anMapFilter");
+  const maps = [...new Set(scoredPeriod.map(x => x.map).filter(Boolean))].sort();
+  const curMap = mapSel.value;
+  mapSel.innerHTML = '<option value="">All maps</option>' + maps.map(m => anOpt(m, m)).join("");
+  if(maps.includes(curMap)) mapSel.value = curMap;
+  const mapF = mapSel.value;
+
+  // set dropdown: only sets that belong to the selected map
+  const setSel = anEl("anSetFilter");
+  const sets = new Map();
+  scoredPeriod.forEach(x => {
+    if(x.setKey && (!mapF || x.map === mapF) && !sets.has(x.setKey)) sets.set(x.setKey, { label: x.setLabel, map: x.map });
+  });
+  const entries = [...sets.entries()].sort((a, b) => a[1].map.localeCompare(b[1].map) || a[1].label.localeCompare(b[1].label));
+  const curSet = setSel.value;
+  let html = '<option value="">All sets</option>';
+  if(mapF){
+    html += entries.map(([k, s]) => anOpt(k, s.label)).join("");
+  } else {
+    const byMap = anGroup(entries.map(([k, s]) => ({ k, s })), e => e.s.map || "(no map)");
+    byMap.forEach((arr, mp) => {
+      html += `<optgroup label="${escapeHtml(mp)}">` + arr.map(e => anOpt(e.k, e.s.label)).join("") + "</optgroup>";
+    });
+  }
+  setSel.innerHTML = html;
+  if(sets.has(curSet)) setSel.value = curSet;
+  const setF = setSel.value;
+
+  const list = scoredPeriod.filter(x => (!mapF || x.map === mapF) && (!setF || x.setKey === setF));
+  const growth = inPeriod.filter(x => x.trophies != null || x.position != null);
+  return { list, growth, scoredTotal: base.filter(x => x.scored).length, restExcluded };
+}
+
+// ---- cards ---------------------------------------------------------------
+function anCards(list){
+  const a = anAgg(list);
+  let cur = { res: null, n: 0 }, bestWin = 0, run = 0;
+  list.forEach(x => {
+    run = x.res === "WIN" ? run + 1 : 0;
+    bestWin = Math.max(bestWin, run);
+    if(cur.res === x.res) cur.n++; else cur = { res: x.res, n: 1 };
+  });
+  const cards = [
+    ["Fights", a.n, a.n ? `${a.record} (W-D-L)` : ""],
+    ["Win rate", anPct(a.winPct), ""],
+    ["Avg our score", anFmtN(a.avgOur), `their avg ${anFmtN(a.avgTheir)}`],
+    ["Avg margin", anFmtSigned(a.avgMargin), ""],
+    ["Our record score", anFmtN(a.best), a.bestDate ? `${anFmtDate(a.bestDate)}${a.bestOpp ? " vs " + a.bestOpp : ""}` : ""],
+    ["Consistency", a.cv == null ? "—" : anPct(a.cv), a.std == null ? "needs 2+ fights" : `std dev ${anFmtN(a.std)} · lower = steadier`],
+    ["Current streak", a.n ? `${cur.n} ${cur.res}` : "—", `longest win streak: ${bestWin}`]
+  ];
+  anEl("anCards").innerHTML = cards.map(([t, v, s]) =>
+    `<div class="an-card"><div class="an-card-title">${escapeHtml(t)}</div><div class="an-card-val">${escapeHtml(String(v))}</div><div class="an-card-sub">${escapeHtml(s)}</div></div>`
+  ).join("");
+}
+
+// ---- charts --------------------------------------------------------------
+function anTrend(list){
+  const el = anEl("anTrend");
+  const data = list.slice(-40);
+  if(data.length < 2){ el.innerHTML = '<p class="hint">Not enough fights for a trend.</p>'; return; }
+  const W = 800, H = 230, pl = 52, pr = 12, pt = 12, pb = 28;
+  const max = Math.max(...data.map(x => x.our), 1);
+  const X = i => pl + (W - pl - pr) * i / (data.length - 1);
+  const Y = v => pt + (H - pt - pb) * (1 - v / max);
+  let grid = "";
+  for(let g = 0; g <= 4; g++){
+    const v = max * g / 4, y = Y(v);
+    grid += `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}" stroke="#e3e6ea"/>` +
+            `<text x="${pl - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="#888">${anFmtN(v)}</text>`;
+  }
+  const line = (k, c) => `<polyline fill="none" stroke="${c}" stroke-width="2" points="${data.map((x, i) => X(i).toFixed(1) + "," + Y(x[k]).toFixed(1)).join(" ")}"/>`;
+  const dots = (k, c, label) => data.map((x, i) =>
+    `<circle cx="${X(i).toFixed(1)}" cy="${Y(x[k]).toFixed(1)}" r="3.5" fill="${c}"><title>${escapeHtml(anFmtDate(x.date) + " — " + label + ": " + anFmtN(x[k]) + (x.opp ? " (vs " + x.opp + ")" : "") + " — " + x.res)}</title></circle>`).join("");
+  const xl = [0, Math.floor((data.length - 1) / 2), data.length - 1]
+    .map(i => `<text x="${X(i)}" y="${H - 8}" text-anchor="${i === 0 ? "start" : i === data.length - 1 ? "end" : "middle"}" font-size="11" fill="#888">${anFmtDate(data[i].date)}</text>`).join("");
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="an-svg">${grid}${line("our", "#7cb648")}${dots("our", "#7cb648", "Our score")}${xl}</svg>` +
+    `<div class="an-legend"><span style="color:#7cb648">● Our score</span> <span class="hint-inline">(last ${data.length} fights)</span></div>`;
+}
+
+// Line chart on a real time axis. pts: [{date, y, tip}] ascending by date.
+const AN_LEAGUES = ["Warm-up", "Novice", "Bronze", "Silver", "Gold"];
+const AN_LEAGUE_COLORS = { "Warm-up": "#8a8f98", Novice: "#4f9d8f", Bronze: "#b0743a", Silver: "#7c8794", Gold: "#c9a21b" };
+// Line chart on a time axis. pts: [{date, y, lines:[...tooltip lines]}] ascending by date.
+// Long stretches without data (more than AN_GAP_DAYS between two points, e.g. rest months)
+// are squeezed to a short fixed width, joined by a dashed line and an axis break mark.
+// marks: { h: [{v, label, color}] horizontal lines, vl: [{t, label, color}] vertical lines (t = ms) }
+const AN_GAP_DAYS = 4, AN_GAP_UNITS = 4;
+function anTimeChart(el, pts, { invert = false, color = "#3d6fd6", fmt = anFmtN, marks = null } = {}){
+  if(pts.length < 2){ el.innerHTML = '<p class="hint">Not enough data points yet.</p>'; return; }
+  const W = 800, H = 210, pl = 52, pr = 12, pt = 12, pb = 28;
+  const DAY = 86400000;
+  // piecewise-linear "compressed" time axis
+  const u = [0], isGap = [false];
+  for(let i = 1; i < pts.length; i++){
+    const dd = (pts[i].date - pts[i - 1].date) / DAY;
+    const gap = dd > AN_GAP_DAYS;
+    isGap.push(gap);
+    u.push(u[i - 1] + (gap ? AN_GAP_UNITS : Math.max(dd, 0.5)));
+  }
+  const uTot = u[u.length - 1] || 1;
+  const px = uu => pl + (W - pl - pr) * uu / uTot;
+  const Xi = i => px(u[i]);
+  const Xt = t => {
+    if(t <= pts[0].date.getTime()) return Xi(0);
+    for(let i = 1; i < pts.length; i++){
+      const t1 = pts[i].date.getTime();
+      if(t <= t1){
+        if(isGap[i]) return Xi(i);
+        const t0 = pts[i - 1].date.getTime();
+        return px(u[i - 1] + (u[i] - u[i - 1]) * (t - t0) / ((t1 - t0) || 1));
+      }
+    }
+    return Xi(pts.length - 1);
+  };
+  let lo = Math.min(...pts.map(p => p.y)), hi = Math.max(...pts.map(p => p.y));
+  if(lo === hi){ lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const frac = v => (v - lo) / (hi - lo);
+  const Y = v => pt + (H - pt - pb) * (invert ? frac(v) : 1 - frac(v));
+  let grid = "";
+  for(let g = 0; g <= 4; g++){
+    const f = g / 4, y = pt + (H - pt - pb) * f;
+    const v = invert ? lo + (hi - lo) * f : hi - (hi - lo) * f;
+    grid += `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}" stroke="#e3e6ea"/>` +
+            `<text x="${pl - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="#888">${fmt(v)}</text>`;
+  }
+  // line: solid inside a stretch, dashed grey across a gap
+  let poly = "", seg = [];
+  const flush = () => { if(seg.length > 1) poly += `<polyline fill="none" stroke="${color}" stroke-width="2" points="${seg.join(" ")}"/>`; seg = []; };
+  pts.forEach((p, i) => {
+    const pt_ = Xi(i).toFixed(1) + "," + Y(p.y).toFixed(1);
+    if(isGap[i]){
+      flush();
+      poly += `<line x1="${Xi(i - 1).toFixed(1)}" y1="${Y(pts[i - 1].y).toFixed(1)}" x2="${Xi(i).toFixed(1)}" y2="${Y(p.y).toFixed(1)}" stroke="#9aa1ab" stroke-width="1.5" stroke-dasharray="3 4"/>`;
+    }
+    seg.push(pt_);
+  });
+  flush();
+  const dots = pts.map((p, i) => `<circle class="an-dot" cx="${Xi(i).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="3.5" fill="${color}"/>`).join("");
+  const hits = pts.map((p, i) => `<circle class="an-hit" data-i="${i}" cx="${Xi(i).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="9" fill="transparent" style="cursor:pointer"/>`).join("");
+  // axis break marks (//) in the middle of every gap
+  let breaks = "";
+  isGap.forEach((g, i) => {
+    if(!g) return;
+    const x = (Xi(i - 1) + Xi(i)) / 2, y = H - pb;
+    breaks += `<rect x="${x - 4}" y="${y - 5}" width="8" height="10" fill="#fff"/>` +
+      `<line x1="${x - 5}" y1="${y + 4}" x2="${x - 1}" y2="${y - 4}" stroke="#666" stroke-width="1.5"/>` +
+      `<line x1="${x + 1}" y1="${y + 4}" x2="${x + 5}" y2="${y - 4}" stroke="#666" stroke-width="1.5"/>`;
+  });
+  // x labels: first, start of every new stretch, last — skipping ones that would overlap
+  const want = [0]; isGap.forEach((g, i) => { if(g) want.push(i); });
+  if(want.length === 1) want.push(Math.floor((pts.length - 1) / 2));
+  want.push(pts.length - 1);
+  const labelIdx = []; let lastX = -1e9;
+  [...new Set(want)].sort((a, b) => a - b).forEach(i => {
+    const x = Xi(i);
+    if(x - lastX < 78 && i !== pts.length - 1) return;
+    if(i === pts.length - 1 && labelIdx.length && x - lastX < 78) labelIdx.pop();
+    labelIdx.push(i); lastX = x;
+  });
+  const xl = labelIdx.map(i => {
+    const x = Xi(i), anchor = i === 0 ? "start" : i === pts.length - 1 ? "end" : "middle";
+    return `<text x="${x.toFixed(1)}" y="${H - 8}" text-anchor="${anchor}" font-size="11" fill="#888">${anFmtDate(pts[i].date)}</text>`;
+  }).join("");
+  // league marks (labels get a white halo and are stacked so they don't overlap)
+  const halo = 'stroke="#fff" stroke-width="3" paint-order="stroke" stroke-linejoin="round"';
+  let mk = "";
+  if(marks){
+    (marks.h || []).forEach(m => {
+      if(m.v < lo || m.v > hi) return;
+      const y = Y(m.v);
+      mk += `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}" stroke="${m.color}" stroke-width="1.5" stroke-dasharray="6 4"/>` +
+            `<text x="${pl + 4}" y="${y - 4}" text-anchor="start" font-size="11" font-weight="700" fill="${m.color}" ${halo}>${escapeHtml(m.label)}</text>`;
+    });
+    const rows = [];
+    [...(marks.vl || [])].map(m => Object.assign({ x: Xt(m.t) }, m)).sort((a, b) => a.x - b.x).forEach(m => {
+      const w = m.label.length * 6.6 + 6, right = m.x > W - pr - w - 10;
+      const x0 = right ? m.x - 4 - w : m.x + 4, x1 = x0 + w;
+      let r = 0;
+      while(r < rows.length && rows[r] > x0 - 2) r++;
+      rows[r] = x1;
+      mk += `<line x1="${m.x}" x2="${m.x}" y1="${pt}" y2="${H - pb}" stroke="${m.color}" stroke-width="1.5" stroke-dasharray="6 4"/>` +
+            `<text x="${right ? m.x - 4 : m.x + 4}" y="${pt + 11 + r * 13}" text-anchor="${right ? "end" : "start"}" font-size="11" font-weight="700" fill="${m.color}" ${halo}>${escapeHtml(m.label)}</text>`;
+    });
+  }
+  el.style.position = "relative";
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" class="an-svg">${grid}${mk}${poly}${dots}${breaks}${xl}${hits}</svg><div class="an-tip" style="display:none"></div>`;
+  // hover tooltip
+  const tip = el.querySelector(".an-tip"), dotEls = el.querySelectorAll(".an-dot");
+  el.querySelectorAll(".an-hit").forEach(h => {
+    const i = Number(h.dataset.i);
+    h.addEventListener("mouseenter", () => {
+      dotEls[i].setAttribute("r", "6");
+      tip.innerHTML = pts[i].lines.map((l, k) => k === 0 ? `<b>${escapeHtml(l)}</b>` : escapeHtml(l)).join("<br>");
+      tip.style.display = "block";
+    });
+    h.addEventListener("mousemove", e => {
+      const r = el.getBoundingClientRect();
+      let left = e.clientX - r.left + 14;
+      if(left + tip.offsetWidth > r.width) left = e.clientX - r.left - tip.offsetWidth - 14;
+      tip.style.left = Math.max(0, left) + "px";
+      tip.style.top = Math.max(0, e.clientY - r.top - tip.offsetHeight - 10) + "px";
+    });
+    h.addEventListener("mouseleave", () => { dotEls[i].setAttribute("r", "3.5"); tip.style.display = "none"; });
+  });
+}
+
+function anGrowth(growth){
+  const longDate = d => d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  const mk = x => ({
+    date: x.date,
+    lines: [longDate(x.date),
+      x.trophies != null ? `Trophies: ${x.trophies}` : null,
+      x.position != null ? `Position: #${x.position}` : null,
+      x.league ? `League: ${x.league}` : null].filter(Boolean)
+  });
+  const tro = growth.filter(x => x.trophies != null).map(x => Object.assign(mk(x), { y: x.trophies }));
+  const pos = growth.filter(x => x.position != null).map(x => Object.assign(mk(x), { y: x.position }));
+  // League markers. Trophies chart: a horizontal line at each league's real
+  // trophy threshold (same values as determineLeagueByTrophies).
+  // Position chart: a vertical line on the day the league changed.
+  const lgIdx = l => AN_LEAGUES.findIndex(x => x.toLowerCase() === String(l || "").toLowerCase());
+  const LEAGUE_MIN = { Novice: 20, Bronze: 50, Silver: 100, Gold: 200 };
+  const hMarks = Object.entries(LEAGUE_MIN).map(([name, v]) => ({ v, label: name + " ▲ " + v, color: AN_LEAGUE_COLORS[name] }));
+  const vMarks = [];
+  let prevL = null;
+  growth.forEach(x => {
+    const i = lgIdx(x.league);
+    if(i < 0) return;
+    if(prevL !== null && i !== prevL) vMarks.push({ t: x.date.getTime(), label: (i > prevL ? "▲ " : "▼ ") + AN_LEAGUES[i], color: AN_LEAGUE_COLORS[AN_LEAGUES[i]] });
+    prevL = i;
+  });
+  anTimeChart(anEl("anGrowthTrophies"), tro, { color: "#7b4fc2", marks: { h: hMarks } });
+  anTimeChart(anEl("anGrowthPosition"), pos, { invert: true, color: "#3d6fd6", fmt: v => "#" + Math.max(1, Math.round(v)), marks: { vl: vMarks } });
+  const parts = [];
+  if(tro.length){
+    const first = tro[0], last = tro[tro.length - 1], peak = Math.max(...tro.map(p => p.y));
+    parts.push(`Trophies: ${first.y} → ${last.y} (${anFmtSigned(last.y - first.y)}), peak ${peak}`);
+  }
+  if(pos.length){
+    const first = pos[0], last = pos[pos.length - 1], bestPos = Math.min(...pos.map(p => p.y));
+    parts.push(`Position: #${first.y} → #${last.y}, best #${bestPos}`);
+  }
+  anEl("anGrowthSummary").textContent = parts.join("  ·  ");
+}
+
+// ---- consistency -----------------------------------------------------------
+function anConsistency(el, id, groups, nameFn, firstLabel, extraCol){
+  const rows = [];
+  groups.forEach(g => {
+    if(g.length < 2) return;
+    const a = anAgg(g);
+    rows.push(Object.assign({ name: nameFn(g[0]), map: g[0].map }, a));
+  });
+  const cols = [{ k: "name", label: firstLabel, left: true, wrap: !!extraCol }];
+  if(extraCol) cols.push({ k: "map", label: "Map", left: true });
+  cols.push(
+    { k: "n", label: "Fights" },
+    { k: "avgOur", label: "Avg", f: r => anFmtN(r.avgOur) },
+    { k: "min", label: "Lowest", f: r => anFmtN(r.min) },
+    { k: "best", label: "Highest", f: r => anFmtN(r.best) },
+    { k: "std", label: "Std dev", f: r => anFmtN(r.std) },
+    { k: "cv", label: "Variation", f: r => anPct(r.cv) }
+  );
+  anTable(el, id, cols, rows, "cv", "asc");
+}
+
+// ---- players ---------------------------------------------------------------
+function anPlayers(list){
+  const m = new Map();
+  list.forEach(x => {
+    Object.entries(x.playerScores).forEach(([name, sc]) => {
+      if(typeof sc !== "number") return;
+      const p = m.get(name) || { name, scores: [], best: -1, bestDate: null, rankSum: 0, rankN: 0, top5: 0 };
+      p.scores.push(sc);
+      if(sc > p.best){ p.best = sc; p.bestDate = x.date; }
+      const r = x.playerRanks[name];
+      if(typeof r === "number"){ p.rankSum += r; p.rankN++; if(r <= 5) p.top5++; }
+      m.set(name, p);
+    });
+  });
+  const rows = [...m.values()].map(p => {
+    const n = p.scores.length, avg = p.scores.reduce((s, v) => s + v, 0) / n, std = anStd(p.scores);
+    return {
+      name: p.name, n, avg, best: p.best, bestDate: p.bestDate,
+      std, cv: (std != null && avg) ? std / avg * 100 : null,
+      avgRank: p.rankN ? p.rankSum / p.rankN : null, top5: p.top5
+    };
+  });
+  anTable(anEl("anPlayers"), "players", [
+    { k: "name", label: "Player", left: true },
+    { k: "n", label: "Fights" },
+    { k: "avg", label: "Avg score", f: r => anFmtN(r.avg) },
+    { k: "best", label: "Best score", f: r => anFmtN(r.best) + (r.bestDate ? ` (${anFmtDate(r.bestDate)})` : "") },
+    { k: "cv", label: "Variation", f: r => anPct(r.cv) },
+    { k: "avgRank", label: "Avg rank", f: r => r.avgRank == null ? "—" : r.avgRank.toFixed(1) },
+    { k: "top5", label: "Top-5 finishes" }
+  ], rows, "avg", "desc");
+}
+
+// ---- opponents / head-to-head -----------------------------------------------
+function anOpponents(list){
+  const groups = anGroup(list.filter(x => x.opp), x => x.opp.toLowerCase());
+  const rows = [...groups.values()].map(g => Object.assign({ opponent: g[0].opp }, anAgg(g)));
+  const cols = anStatCols("opponent", "Opponent");
+  cols.push({ k: "last", label: "Last fight", f: r => anFmtDate(r.last) });
+  anTable(anEl("anOpponents"), "opponents", cols, rows, "n", "desc", r => {
+    anEl("anOppSelect").value = r.opponent.toLowerCase();
+    anH2H(list);
+  });
+  const sel = anEl("anOppSelect");
+  const cur = sel.value;
+  const opts = [...groups.entries()].sort((a, b) => b[1].length - a[1].length || a[1][0].opp.localeCompare(b[1][0].opp));
+  sel.innerHTML = '<option value="">— pick an opponent —</option>' +
+    opts.map(([k, g]) => anOpt(k, `${g[0].opp} (${g.length})`)).join("");
+  if(groups.has(cur)) sel.value = cur;
+  anH2H(list);
+}
+
+function anH2H(list){
+  const key = anEl("anOppSelect").value;
+  const box = anEl("anH2H");
+  if(!key){ box.innerHTML = '<p class="hint">Pick an opponent above (or click a row in the table) to see all fights against them.</p>'; return; }
+  const fights = list.filter(x => x.opp.toLowerCase() === key);
+  const a = anAgg(fights);
+  const summary = `<p class="an-summary"><b>${escapeHtml(fights[0] ? fights[0].opp : "")}</b>: ${a.n} fight(s), record ${a.record} (${anPct(a.winPct)} wins) · avg ${anFmtN(a.avgOur)} vs ${anFmtN(a.avgTheir)} · our best ${anFmtN(a.best)}</p>`;
+  box.innerHTML = summary + '<div id="anH2HTable"></div>';
+  const rows = fights.map(x => ({ date: x.date, map: x.map, set: x.setLabel, our: x.our, their: x.their, res: x.res, margin: x.our - x.their }));
+  anTable(anEl("anH2HTable"), "h2h", [
+    { k: "date", label: "Date", f: r => anFmtDate(r.date), left: true },
+    { k: "map", label: "Map", left: true },
+    { k: "set", label: "Set", left: true, wrap: true },
+    { k: "our", label: "Our score", f: r => anFmtN(r.our) },
+    { k: "their", label: "Their score", f: r => anFmtN(r.their) },
+    { k: "margin", label: "Margin", f: r => anFmtSigned(r.margin) },
+    { k: "res", label: "Result", cls: r => r.res === "WIN" ? "pos" : r.res === "LOSS" ? "neg" : "" }
+  ], rows, "date", "desc");
+}
+
+// ---- main render ----------------------------------------------------------
+function renderAnalytics(){
+  if(!anEl("anCards")) return;
+  const { list, growth, scoredTotal, restExcluded } = anFiltered();
+  anEl("anInfo").textContent =
+    (scoredTotal ? `${list.length} of ${scoredTotal} completed fight(s) match the filters.` : "No completed fights yet — fights need both final scores.") +
+    (restExcluded ? ` ${restExcluded} fight(s) in rest months are left out (switch above).` : "");
+  anCards(list);
+  anTrend(list);
+  anGrowth(growth);
+
+  const withMap = list.filter(x => x.map);
+  const mapGroups = anGroup(withMap, x => x.map);
+  anTable(anEl("anMaps"), "maps", anStatCols("map", "Map"),
+    [...mapGroups.entries()].map(([k, g]) => Object.assign({ map: k }, anAgg(g))), "n", "desc");
+
+  const withSet = list.filter(x => x.setKey);
+  const setGroups = anGroup(withSet, x => x.setKey);
+  const setCols = anStatCols("set", "Set (4 fish)");
+  setCols.splice(1, 0, { k: "map", label: "Map", left: true });
+  anTable(anEl("anSets"), "sets", setCols,
+    [...setGroups.values()].map(g => Object.assign({ set: g[0].setLabel, map: g[0].map }, anAgg(g))), "n", "desc");
+
+  const missing = list.length - withSet.length;
+  anEl("anMissing").textContent = missing > 0
+    ? `${missing} fight(s) in this view have no map/set saved yet — they are left out of the Maps and Sets tables.` : "";
+
+  anConsistency(anEl("anConsSets"), "consSets", setGroups, g => g.setLabel, "Set (4 fish)", true);
+  anConsistency(anEl("anConsMaps"), "consMaps", mapGroups, g => g.map, "Map", false);
+
+  anOpponents(list);
+  anPlayers(list);
+}
+function renderAnalyticsIfActive(){
+  const p = document.getElementById("tab-analytics");
+  if(p && p.classList.contains("active")) renderAnalytics();
+}
+["anPeriod", "anMapFilter", "anSetFilter", "anIncludeRest"].forEach(id => anEl(id).addEventListener("change", renderAnalytics));
+anEl("anOppSelect").addEventListener("change", () => anH2H(anFiltered().list));
+
+
 renderCalendar();
 renderTables();
 renderPlayersManageList();
