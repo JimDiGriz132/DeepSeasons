@@ -2495,9 +2495,9 @@ const AN_LEAGUE_COLORS = { "Warm-up": "#8a8f98", Novice: "#4f9d8f", Bronze: "#b0
 // are squeezed to a short fixed width, joined by a dashed line and an axis break mark.
 // marks: { h: [{v, label, color}] horizontal lines, vl: [{t, label, color}] vertical lines (t = ms) }
 const AN_GAP_DAYS = 4, AN_GAP_UNITS = 4;
-function anTimeChart(el, pts, { invert = false, color = "#3d6fd6", fmt = anFmtN, marks = null } = {}){
+function anTimeChart(el, pts, { invert = false, color = "#3d6fd6", fmt = anFmtN, marks = null, height = 210, yRange = null, yTicks = null, bands = null } = {}){
   if(pts.length < 2){ el.innerHTML = '<p class="hint">Not enough data points yet.</p>'; return; }
-  const W = 800, H = 210, pl = 52, pr = 12, pt = 12, pb = 28;
+  const W = 800, H = height, pl = 52, pr = 12, pt = 12, pb = 28;
   const DAY = 86400000;
   // piecewise-linear "compressed" time axis
   const u = [0], isGap = [false];
@@ -2523,17 +2523,36 @@ function anTimeChart(el, pts, { invert = false, color = "#3d6fd6", fmt = anFmtN,
     return Xi(pts.length - 1);
   };
   let lo = Math.min(...pts.map(p => p.y)), hi = Math.max(...pts.map(p => p.y));
-  if(lo === hi){ lo -= 1; hi += 1; }
-  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  if(yRange){ lo = yRange[0]; hi = yRange[1]; }
+  else {
+    if(lo === hi){ lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  }
   const frac = v => (v - lo) / (hi - lo);
   const Y = v => pt + (H - pt - pb) * (invert ? frac(v) : 1 - frac(v));
   let grid = "";
-  for(let g = 0; g <= 4; g++){
-    const f = g / 4, y = pt + (H - pt - pb) * f;
-    const v = invert ? lo + (hi - lo) * f : hi - (hi - lo) * f;
-    grid += `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}" stroke="#e3e6ea"/>` +
-            `<text x="${pl - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="#888">${fmt(v)}</text>`;
+  // league bands (background + name)
+  (bands || []).forEach(b => {
+    grid += `<rect x="${pl}" y="${Y(b.v1)}" width="${W - pl - pr}" height="${Y(b.v0) - Y(b.v1)}" fill="${b.color}" fill-opacity="0.13"/>` +
+            `<line x1="${pl}" x2="${W - pr}" y1="${Y(b.v1)}" y2="${Y(b.v1)}" stroke="${b.color}" stroke-width="1.5"/>`;
+  });
+  if(yTicks){
+    yTicks.forEach(t => {
+      grid += `<line x1="${pl}" x2="${W - pr}" y1="${Y(t.v)}" y2="${Y(t.v)}" stroke="#e3e6ea" stroke-width="0.7"/>` +
+              `<text x="${pl - 6}" y="${Y(t.v) + 4}" text-anchor="end" font-size="10" fill="#888">${escapeHtml(t.label)}</text>`;
+    });
+  } else {
+    for(let g = 0; g <= 4; g++){
+      const f = g / 4, y = pt + (H - pt - pb) * f;
+      const v = invert ? lo + (hi - lo) * f : hi - (hi - lo) * f;
+      grid += `<line x1="${pl}" x2="${W - pr}" y1="${y}" y2="${y}" stroke="#e3e6ea"/>` +
+              `<text x="${pl - 6}" y="${y + 4}" text-anchor="end" font-size="11" fill="#888">${fmt(v)}</text>`;
+    }
   }
+  const halo0 = 'stroke="#fff" stroke-width="3" paint-order="stroke" stroke-linejoin="round"';
+  (bands || []).forEach(b => {
+    grid += `<text x="${W - pr - 6}" y="${Y(b.v1) + 14}" text-anchor="end" font-size="12" font-weight="700" fill="${b.color}" ${halo0}>${escapeHtml(b.label)}</text>`;
+  });
   // line: solid inside a stretch, dashed grey across a gap
   let poly = "", seg = [];
   const flush = () => { if(seg.length > 1) poly += `<polyline fill="none" stroke="${color}" stroke-width="2" points="${seg.join(" ")}"/>`; seg = []; };
@@ -2625,31 +2644,40 @@ function anGrowth(growth){
       x.league ? `League: ${x.league}` : null].filter(Boolean)
   });
   const tro = growth.filter(x => x.trophies != null).map(x => Object.assign(mk(x), { y: x.trophies }));
-  const pos = growth.filter(x => x.position != null).map(x => Object.assign(mk(x), { y: x.position }));
-  // League markers. Trophies chart: a horizontal line at each league's real
-  // trophy threshold (same values as determineLeagueByTrophies).
-  // Position chart: a vertical line on the day the league changed.
   const lgIdx = l => AN_LEAGUES.findIndex(x => x.toLowerCase() === String(l || "").toLowerCase());
   const LEAGUE_MIN = { Novice: 20, Bronze: 50, Silver: 100, Gold: 200 };
   const hMarks = Object.entries(LEAGUE_MIN).map(([name, v]) => ({ v, label: name + " ▲ " + v, color: AN_LEAGUE_COLORS[name] }));
-  const vMarks = [];
-  let prevL = null;
-  growth.forEach(x => {
-    const i = lgIdx(x.league);
-    if(i < 0) return;
-    if(prevL !== null && i !== prevL) vMarks.push({ t: x.date.getTime(), label: (i > prevL ? "▲ " : "▼ ") + AN_LEAGUES[i], color: AN_LEAGUE_COLORS[AN_LEAGUES[i]] });
-    prevL = i;
-  });
   anTimeChart(anEl("anGrowthTrophies"), tro, { color: "#7b4fc2", marks: { h: hMarks } });
-  anTimeChart(anEl("anGrowthPosition"), pos, { invert: true, color: "#3d6fd6", fmt: v => "#" + Math.max(1, Math.round(v)), marks: { vl: vMarks } });
+
+  // Position chart: a position (#1..#N) is only comparable inside its own league, so the
+  // chart is split into one band per league (higher league = higher band, #1 at the top
+  // of each band). #4 in Gold therefore always plots above #1 in Silver.
+  const pos = growth.filter(x => x.position != null).map(x => Object.assign(mk(x), { raw: x.position, li: lgIdx(x.league), y: x.position }));
+  const posOk = pos.length >= 2 && pos.every(p => p.li >= 0);
+  if(posOk){
+    const minLi = Math.min(...pos.map(p => p.li)), maxLi = Math.max(...pos.map(p => p.li));
+    const N = Math.max(10, ...pos.map(p => p.raw)), stride = N + 1;
+    pos.forEach(p => { p.y = (p.li - minLi) * stride + (N + 1 - p.raw); });
+    const bands = [], yTicks = [];
+    const tickPos = [1]; for(let k = 10; k <= N; k += 10) tickPos.push(k); if(N - tickPos[tickPos.length - 1] >= 4) tickPos.push(N);
+    for(let li = minLi; li <= maxLi; li++){
+      const base = (li - minLi) * stride;
+      bands.push({ v0: base, v1: base + stride, color: AN_LEAGUE_COLORS[AN_LEAGUES[li]], label: AN_LEAGUES[li] });
+      tickPos.forEach(tp => yTicks.push({ v: base + (N + 1 - tp), label: "#" + tp }));
+    }
+    anTimeChart(anEl("anGrowthPosition"), pos, { color: "#3d6fd6", height: 120 + 90 * (maxLi - minLi + 1), yRange: [0, (maxLi - minLi + 1) * stride], yTicks, bands });
+  } else {
+    // league unknown for some points → fall back to the plain position chart
+    anTimeChart(anEl("anGrowthPosition"), pos, { invert: true, color: "#3d6fd6", fmt: v => "#" + Math.max(1, Math.round(v)) });
+  }
   const parts = [];
   if(tro.length){
     const first = tro[0], last = tro[tro.length - 1], peak = Math.max(...tro.map(p => p.y));
     parts.push(`Trophies: ${first.y} → ${last.y} (${anFmtSigned(last.y - first.y)}), peak ${peak}`);
   }
   if(pos.length){
-    const first = pos[0], last = pos[pos.length - 1], bestPos = Math.min(...pos.map(p => p.y));
-    parts.push(`Position: #${first.y} → #${last.y}, best #${bestPos}`);
+    const first = pos[0], last = pos[pos.length - 1], bestPos = Math.min(...pos.map(p => p.raw));
+    parts.push(`Position: #${first.raw} (${first.li >= 0 ? AN_LEAGUES[first.li] : "?"}) → #${last.raw} (${last.li >= 0 ? AN_LEAGUES[last.li] : "?"}), best #${bestPos}`);
   }
   anEl("anGrowthSummary").textContent = parts.join("  ·  ");
 }
