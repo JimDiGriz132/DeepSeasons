@@ -2656,16 +2656,20 @@ function anGrowth(growth){
   const posOk = pos.length >= 2 && pos.every(p => p.li >= 0);
   if(posOk){
     const minLi = Math.min(...pos.map(p => p.li)), maxLi = Math.max(...pos.map(p => p.li));
-    const N = Math.max(10, ...pos.map(p => p.raw)), stride = N + 1;
-    pos.forEach(p => { p.y = (p.li - minLi) * stride + (N + 1 - p.raw); });
+    // Every league band has the same height; its size N is the worst position
+    // actually seen in THAT league (a lower bound of the real league size).
+    const Nl = {};
+    pos.forEach(p => { Nl[p.li] = Math.max(Nl[p.li] || 0, p.raw); });
+    for(let li = minLi; li <= maxLi; li++) Nl[li] = Math.max(Nl[li] || 0, 5);
+    pos.forEach(p => { p.y = (p.li - minLi) + (Nl[p.li] + 1 - p.raw) / (Nl[p.li] + 1); });
     const bands = [], yTicks = [];
-    const tickPos = [1]; for(let k = 10; k <= N; k += 10) tickPos.push(k); if(N - tickPos[tickPos.length - 1] >= 4) tickPos.push(N);
     for(let li = minLi; li <= maxLi; li++){
-      const base = (li - minLi) * stride;
-      bands.push({ v0: base, v1: base + stride, color: AN_LEAGUE_COLORS[AN_LEAGUES[li]], label: AN_LEAGUES[li] });
-      tickPos.forEach(tp => yTicks.push({ v: base + (N + 1 - tp), label: "#" + tp }));
+      const N = Nl[li], base = li - minLi;
+      bands.push({ v0: base, v1: base + 1, color: AN_LEAGUE_COLORS[AN_LEAGUES[li]], label: `${AN_LEAGUES[li]} (#1–#${N})` });
+      const tickPos = [1]; for(let k = 5; k <= N; k += 5) tickPos.push(k); if(N - tickPos[tickPos.length - 1] >= 2) tickPos.push(N);
+      tickPos.forEach(tp => yTicks.push({ v: base + (N + 1 - tp) / (N + 1), label: "#" + tp }));
     }
-    anTimeChart(anEl("anGrowthPosition"), pos, { color: "#3d6fd6", height: 120 + 90 * (maxLi - minLi + 1), yRange: [0, (maxLi - minLi + 1) * stride], yTicks, bands });
+    anTimeChart(anEl("anGrowthPosition"), pos, { color: "#3d6fd6", height: 120 + 90 * (maxLi - minLi + 1), yRange: [0, maxLi - minLi + 1], yTicks, bands });
   } else {
     // league unknown for some points → fall back to the plain position chart
     anTimeChart(anEl("anGrowthPosition"), pos, { invert: true, color: "#3d6fd6", fmt: v => "#" + Math.max(1, Math.round(v)) });
