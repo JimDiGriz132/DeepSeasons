@@ -2467,8 +2467,9 @@ function anTable(el, id, cols, rows, defKey, defDir, onRow){
   const body = sorted.map((r, i) => {
     const tds = cols.map(c => {
       const v = c.f ? c.f(r) : (r[c.k] == null || r[c.k] === "" ? "—" : r[c.k]);
-      const cls = (c.left ? "left " : "") + (c.wrap ? "wrap " : "") + (c.cls ? c.cls(r) : "");
-      return `<td class="${cls}">${escapeHtml(String(v))}</td>`;
+      const clickable = !!c.onCell && (!c.cellOk || c.cellOk(r));
+      const cls = (c.left ? "left " : "") + (c.wrap ? "wrap " : "") + (clickable ? "clickable-cell " : "") + (c.cls ? c.cls(r) : "");
+      return `<td class="${cls}"${clickable ? ` data-ck="${c.k}" title="Open this fight"` : ""}>${escapeHtml(String(v))}</td>`;
     }).join("");
     return `<tr data-i="${i}" class="${onRow ? "clickable-row" : ""}">${tds}</tr>`;
   }).join("");
@@ -2480,14 +2481,68 @@ function anTable(el, id, cols, rows, defKey, defDir, onRow){
     anTable(el, id, cols, rows, defKey, defDir, onRow);
   }));
   if(onRow) el.querySelectorAll("tbody tr").forEach(tr => tr.addEventListener("click", () => onRow(sorted[Number(tr.dataset.i)])));
+  el.querySelectorAll("td[data-ck]").forEach(td => td.addEventListener("click", ev => {
+    ev.stopPropagation();
+    const col = cols.find(c => c.k === td.dataset.ck);
+    const row = sorted[Number(td.parentElement.dataset.i)];
+    if(col && col.onCell && row) col.onCell(row);
+  }));
 }
+
+// open the day editor for a fight date (used by clickable dates in Analytics)
+function anOpenFight(date){
+  if(!(date instanceof Date) || isNaN(date)) return;
+  const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
+  const f = state.fights[dateKey(y, m, d)];
+  if(!f) return;
+
+  const val = v => (v == null || String(v).trim() === "") ? "—" : escapeHtml(String(v));
+  const num = v => { const n = parseScoreVal(v); return n == null ? val(v) : escapeHtml(anFmtN(n)); };
+
+  const res = computeResult(f);
+  const score = res
+    ? `<span class="badge ${res.toLowerCase()}">${res}</span> <span class="fv-score-nums">${num(f.ourFinalScore)} : ${num(f.theirFinalScore)}</span>`
+    : '<span class="hint-inline">No final score saved</span>';
+
+  const clanBox = (title, name, tr, pos, lg) =>
+    `<div class="fv-col"><h4>${escapeHtml(title)}</h4>
+      <div class="fv-name">${val(name)}</div>
+      <div>Trophies: <b>${num(tr)}</b></div>
+      <div>Position: <b>${pos == null || String(pos).trim() === "" ? "—" : "#" + escapeHtml(String(pos).replace(/^#/, ""))}</b></div>
+      <div>League: <b>${val(lg)}</b></div></div>`;
+
+  const fish = (f.fishSet || []).map(titleCase).filter(Boolean);
+  const mapSet = (f.mapName || fish.length)
+    ? `<div class="fv-section"><h4>Map &amp; Set</h4><div>Map: <b>${val(titleCase(f.mapName))}</b></div><div>Set: <b>${fish.length ? escapeHtml(fish.join(" · ")) : "—"}</b></div></div>`
+    : "";
+
+  const ranks = f.playerRanks || {}, scores = f.playerScores || {};
+  const entries = Object.entries(ranks).sort((a, b) => (Number(a[1]) || 999) - (Number(b[1]) || 999));
+  const board = entries.length
+    ? `<div class="fv-section"><h4>Scoreboard</h4><table class="fv-table"><thead><tr><th>Rank</th><th>Player</th><th>Score</th></tr></thead><tbody>` +
+      entries.map(([name, rank]) =>
+        `<tr class="${Number(rank) <= SCORE_COUNTING_PLAYERS ? "fv-top" : ""}"><td>${escapeHtml(String(rank))}</td><td class="left">${escapeHtml(name)}</td><td>${scores[name] == null ? "—" : num(scores[name])}</td></tr>`
+      ).join("") + `</tbody></table><p class="hint" style="text-align:left">Bold rows = top ${SCORE_COUNTING_PLAYERS}, the players that count towards the clan score.</p></div>`
+    : '<div class="fv-section"><h4>Scoreboard</h4><p class="hint" style="text-align:left">No scoreboard saved for this day.</p></div>';
+
+  document.getElementById("fvTitle").textContent = `${d}. ${MONTHS[m]} ${y}.`;
+  document.getElementById("fvBody").innerHTML =
+    `<div class="fv-result">${score}</div>
+     <div class="fv-grid">${clanBox("Our Clan", state.ourClanName, f.ourTrophies, f.ourPosition, f.ourLeague)}${clanBox("Opponent", f.opponentName, f.oppTrophies, f.oppPosition, f.oppLeague)}</div>
+     ${mapSet}${board}`;
+  document.getElementById("fightViewModal").classList.remove("hidden");
+}
+function closeFightView(){ document.getElementById("fightViewModal").classList.add("hidden"); }
+document.getElementById("fvClose").addEventListener("click", closeFightView);
+document.getElementById("fightViewModal").addEventListener("click", ev => { if(ev.target.id === "fightViewModal") closeFightView(); });
+document.addEventListener("keydown", ev => { if(ev.key === "Escape") closeFightView(); });
 
 const anStatCols = (firstKey, firstLabel) => [
   { k: firstKey, label: firstLabel, left: true, wrap: firstKey === "set" },
   { k: "n", label: "Fights" },
   { k: "winPct", label: "W-D-L / Win %", f: r => `${r.record}  (${anPct(r.winPct)})` },
   { k: "avgOur", label: "Avg our", f: r => anFmtN(r.avgOur) },
-  { k: "best", label: "Record", f: r => anFmtN(r.best) + (r.bestDate ? ` (${anFmtDate(r.bestDate)})` : "") },
+  { k: "best", label: "Record", f: r => anFmtN(r.best) + (r.bestDate ? ` (${anFmtDate(r.bestDate)})` : ""), onCell: r => anOpenFight(r.bestDate), cellOk: r => !!r.bestDate },
   { k: "avgTheir", label: "Avg their", f: r => anFmtN(r.avgTheir) },
   { k: "avgMargin", label: "Avg margin", f: r => anFmtSigned(r.avgMargin), cls: r => r.avgMargin > 0 ? "pos" : r.avgMargin < 0 ? "neg" : "" }
 ];
@@ -2538,7 +2593,8 @@ function anFiltered(){
 
   const list = scoredPeriod.filter(x => (!mapF || x.map === mapF) && (!setF || x.setKey === setF));
   const growth = inPeriod.filter(x => x.trophies != null || x.position != null);
-  return { list, growth, scoredTotal: base.filter(x => x.scored).length, restExcluded };
+  const draws = inPeriod.filter(x => x.map);
+  return { list, growth, draws, scoredTotal: base.filter(x => x.scored).length, restExcluded };
 }
 
 // ---- cards ---------------------------------------------------------------
@@ -2834,7 +2890,7 @@ function anPlayers(list){
     { k: "name", label: "Player", left: true },
     { k: "n", label: "Fights" },
     { k: "avg", label: "Avg score", f: r => anFmtN(r.avg) },
-    { k: "best", label: "Best score", f: r => anFmtN(r.best) + (r.bestDate ? ` (${anFmtDate(r.bestDate)})` : "") },
+    { k: "best", label: "Best score", f: r => anFmtN(r.best) + (r.bestDate ? ` (${anFmtDate(r.bestDate)})` : ""), onCell: r => anOpenFight(r.bestDate), cellOk: r => !!r.bestDate },
     { k: "cv", label: "Variation", f: r => anPct(r.cv) },
     { k: "avgRank", label: "Avg rank", f: r => r.avgRank == null ? "—" : r.avgRank.toFixed(1) },
     { k: "top5", label: "Top-5 finishes" }
@@ -2846,7 +2902,7 @@ function anOpponents(list){
   const groups = anGroup(list.filter(x => x.opp), x => x.opp.toLowerCase());
   const rows = [...groups.values()].map(g => Object.assign({ opponent: g[0].opp }, anAgg(g)));
   const cols = anStatCols("opponent", "Opponent");
-  cols.push({ k: "last", label: "Last fight", f: r => anFmtDate(r.last) });
+  cols.push({ k: "last", label: "Last fight", f: r => anFmtDate(r.last), onCell: r => anOpenFight(r.last), cellOk: r => !!r.last });
   anTable(anEl("anOpponents"), "opponents", cols, rows, "n", "desc", r => {
     anEl("anOppSelect").value = r.opponent.toLowerCase();
     anH2H(list);
@@ -2870,7 +2926,7 @@ function anH2H(list){
   box.innerHTML = summary + '<div id="anH2HTable"></div>';
   const rows = fights.map(x => ({ date: x.date, map: x.map, set: x.setLabel, our: x.our, their: x.their, res: x.res, margin: x.our - x.their }));
   anTable(anEl("anH2HTable"), "h2h", [
-    { k: "date", label: "Date", f: r => anFmtDate(r.date), left: true },
+    { k: "date", label: "Date", f: r => anFmtDate(r.date), left: true, onCell: r => anOpenFight(r.date), cellOk: r => !!r.date },
     { k: "map", label: "Map", left: true },
     { k: "set", label: "Set", left: true, wrap: true },
     { k: "our", label: "Our score", f: r => anFmtN(r.our) },
@@ -2880,10 +2936,73 @@ function anH2H(list){
   ], rows, "date", "desc");
 }
 
+// ---- map / set draw randomness -----------------------------------------------
+function anDraw(draws){
+  const sum = anEl("anDrawSummary"), elMaps = anEl("anDrawMaps"), elSets = anEl("anDrawSets");
+  if(!sum || !elMaps || !elSets) return;
+  if(!draws.length){
+    sum.textContent = "";
+    elMaps.innerHTML = '<p class="hint">No fights with a map saved yet.</p>';
+    elSets.innerHTML = "";
+    return;
+  }
+  const total = draws.length;
+  const mapCnt = new Map();
+  draws.forEach(x => mapCnt.set(x.map, (mapCnt.get(x.map) || 0) + 1));
+
+  // consecutive days only (a missing day breaks the chain)
+  let pairs = 0, repeats = 0;
+  const after = new Map(); // map -> { w, l }
+  for(let i = 1; i < draws.length; i++){
+    const a = draws[i - 1], b = draws[i];
+    if(Math.round((b.date - a.date) / 864e5) !== 1) continue;
+    pairs++;
+    if(a.map === b.map) repeats++;
+    if(a.res === "WIN" || a.res === "LOSS"){
+      const o = after.get(b.map) || { w: 0, l: 0 };
+      if(a.res === "WIN") o.w++; else o.l++;
+      after.set(b.map, o);
+    }
+  }
+  const expRepeat = [...mapCnt.values()].reduce((s, c) => s + (c / total) ** 2, 0) * 100;
+  sum.textContent =
+    `${total} fight(s) with a map · ${mapCnt.size} different map(s) seen. ` +
+    (pairs
+      ? `Same map two days in a row: ${repeats} of ${pairs} (${anPct(repeats / pairs * 100)}). If maps were drawn independently with these frequencies you'd expect about ${anPct(expRepeat)}.`
+      : "Not enough consecutive days to check repeats yet.");
+
+  const mapRows = [...mapCnt.entries()].map(([map, n]) => {
+    const o = after.get(map) || { w: 0, l: 0 };
+    return { map, n, share: n / total * 100, afterWin: o.w, afterLoss: o.l };
+  });
+  anTable(elMaps, "drawMaps", [
+    { k: "map", label: "Map", left: true },
+    { k: "n", label: "Times drawn" },
+    { k: "share", label: "Share", f: r => anPct(r.share) },
+    { k: "afterWin", label: "Came after a win" },
+    { k: "afterLoss", label: "Came after a loss" }
+  ], mapRows, "n", "desc");
+
+  const withSet = draws.filter(x => x.setKey);
+  const mapTotals = new Map();
+  withSet.forEach(x => mapTotals.set(x.map, (mapTotals.get(x.map) || 0) + 1));
+  const setGroups = anGroup(withSet, x => x.setKey);
+  const setRows = [...setGroups.values()].map(g => ({
+    map: g[0].map, set: g[0].setLabel, n: g.length,
+    share: g.length / mapTotals.get(g[0].map) * 100
+  }));
+  anTable(elSets, "drawSets", [
+    { k: "map", label: "Map", left: true },
+    { k: "set", label: "Set (4 fish)", left: true, wrap: true },
+    { k: "n", label: "Times drawn" },
+    { k: "share", label: "Share of map's draws", f: r => anPct(r.share) }
+  ], setRows, "map", "asc");
+}
+
 // ---- main render ----------------------------------------------------------
 function renderAnalytics(){
   if(!anEl("anCards")) return;
-  const { list, growth, scoredTotal, restExcluded } = anFiltered();
+  const { list, growth, draws, scoredTotal, restExcluded } = anFiltered();
   anEl("anInfo").textContent =
     (scoredTotal ? `${list.length} of ${scoredTotal} completed fight(s) match the filters.` : "No completed fights yet — fights need both final scores.") +
     (restExcluded ? ` ${restExcluded} fight(s) in rest months are left out (switch above).` : "");
@@ -2907,6 +3026,7 @@ function renderAnalytics(){
   anEl("anMissing").textContent = missing > 0
     ? `${missing} fight(s) in this view have no map/set saved yet — they are left out of the Maps and Sets tables.` : "";
 
+  anDraw(draws);
   anConsistency(anEl("anConsSets"), "consSets", setGroups, g => g.setLabel, "Set (4 fish)", true);
   anConsistency(anEl("anConsMaps"), "consMaps", mapGroups, g => g.map, "Map", false);
 

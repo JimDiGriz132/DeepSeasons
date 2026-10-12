@@ -91,6 +91,14 @@
       <div id="anSets"></div>
       <p class="hint an-missing" id="anMissing"></p>
 
+      <h3>Map &amp; set draw</h3>
+      <p class="hint" style="text-align:left">The game picks the map/set, so this only checks whether the draw looks random. Ignores the map/set filters. Small samples swing a lot &mdash; a pattern means something only after dozens of fights.</p>
+      <p class="an-summary" id="anDrawSummary"></p>
+      <div class="an-subtitle">Maps (and which map came after a win / after a loss on the day before)</div>
+      <div id="anDrawMaps"></div>
+      <div class="an-subtitle">Sets within each map (share of that map's draws)</div>
+      <div id="anDrawSets"></div>
+
       <h3>Consistency</h3>
       <p class="hint" style="text-align:left">How much our score varies between fights (std dev, and "Variation" = std dev ÷ average). Lower variation = steadier results. Needs 2+ fights; with only 2–3 fights treat it as a rough hint. Click a column to sort.</p>
       <div class="an-subtitle">By set</div>
@@ -294,6 +302,17 @@
       <p id="loginMsg" class="login-msg"></p>
       <button type="submit" class="primary">Log in</button>
     </form>
+  </div>
+</div>
+
+<!-- ===================== READ-ONLY FIGHT VIEW (opened from Analytics) ===================== -->
+<div id="fightViewModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="fvTitle"></h2>
+      <button id="fvClose" class="close-btn" type="button">✕</button>
+    </div>
+    <div class="modal-body fv-body" id="fvBody"></div>
   </div>
 </div>
 

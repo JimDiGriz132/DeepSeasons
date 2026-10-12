@@ -331,3 +331,29 @@ body:not(.is-admin) .admin-only{display:none !important;}
 
 /* chart hover tooltip */
 .an-tip{position:absolute;pointer-events:none;background:#1f2430;color:#fff;font-size:.78rem;line-height:1.4;padding:6px 10px;border-radius:6px;white-space:nowrap;z-index:5;box-shadow:0 4px 12px rgba(0,0,0,.25);}
+/* ===== Clickable fight dates in Analytics ===== */
+.an-table td.clickable-cell{cursor:pointer;color:var(--accent);text-decoration:underline dotted;}
+.an-table td.clickable-cell:hover{background:#eef3ff;}
+
+/* ===== Calendar header: fixed-width month label so the arrows never move ===== */
+.calendar-header h2{width:230px;margin:0;text-align:center;white-space:nowrap;}
+@media (max-width:640px){
+  .calendar-header{gap:10px;}
+  .calendar-header h2{width:170px;font-size:1.15rem;}
+}
+
+/* ===== Read-only fight view ===== */
+.fv-body{padding-bottom:20px;}
+.fv-result{margin:14px 0 6px;font-size:1.25rem;font-weight:800;display:flex;align-items:center;gap:12px;}
+.fv-score-nums{letter-spacing:.02em;}
+.fv-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:10px;}
+.fv-col{border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:.9rem;line-height:1.6;}
+.fv-col h4,.fv-section h4{margin:0 0 4px;font-size:.78rem;color:var(--gray);text-transform:uppercase;letter-spacing:.03em;}
+.fv-name{font-weight:800;font-size:1rem;}
+.fv-section{margin-top:16px;font-size:.9rem;line-height:1.6;}
+.fv-table{border-collapse:collapse;width:100%;font-size:.85rem;}
+.fv-table th{font-size:.75rem;color:var(--gray);text-align:center;padding:4px 8px;border-bottom:1px solid var(--border);}
+.fv-table td{padding:4px 8px;text-align:center;border-bottom:1px solid #eceff2;}
+.fv-table td.left{text-align:left;}
+.fv-table tr.fv-top td{font-weight:700;}
+@media (max-width:640px){ .fv-grid{grid-template-columns:1fr;} }
