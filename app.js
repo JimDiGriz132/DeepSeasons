@@ -1724,11 +1724,11 @@ const AI_PROVIDERS = {
     label: "Google Gemini",
     defaultModel: "gemini-flash-lite-latest",
     hint: "Free tier available — create a key at aistudio.google.com/apikey. Tip: in the Model field you can list several models separated by commas (e.g. gemini-flash-lite-latest, gemini-flash-latest) — when one is rate-limited, the next is used automatically, because each model has its own free quota.",
-    build(key, model, b64, mime, prompt){
+    build(key, model, images, prompt){
       return {
         url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
         headers: { "Content-Type": "application/json" },
-        body: { contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mime, data: b64 } }] }], generationConfig: { temperature: 0 } }
+        body: { contents: [{ parts: [{ text: prompt }, ...images.map(im => ({ inline_data: { mime_type: im.mime, data: im.b64 } }))] }], generationConfig: { temperature: 0 } }
       };
     },
     parse(data){
@@ -1740,13 +1740,13 @@ const AI_PROVIDERS = {
     label: "OpenAI",
     defaultModel: "gpt-4o-mini",
     hint: "Paid (needs credit on your account) — platform.openai.com/api-keys. Any vision-capable model works.",
-    build(key, model, b64, mime, prompt){
+    build(key, model, images, prompt){
       return {
         url: "https://api.openai.com/v1/chat/completions",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
         body: { model, messages: [{ role: "user", content: [
           { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } }
+          ...images.map(im => ({ type: "image_url", image_url: { url: `data:${im.mime};base64,${im.b64}` } }))
         ] }] }
       };
     },
@@ -1756,7 +1756,7 @@ const AI_PROVIDERS = {
     label: "Anthropic (Claude)",
     defaultModel: "claude-haiku-4-5-20251001",
     hint: "Paid — console.anthropic.com. Any Claude model with vision works.",
-    build(key, model, b64, mime, prompt){
+    build(key, model, images, prompt){
       return {
         url: "https://api.anthropic.com/v1/messages",
         headers: {
@@ -1765,8 +1765,8 @@ const AI_PROVIDERS = {
           "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true"
         },
-        body: { model, max_tokens: 2000, temperature: 0, messages: [{ role: "user", content: [
-          { type: "image", source: { type: "base64", media_type: mime, data: b64 } },
+        body: { model, max_tokens: 4000, temperature: 0, messages: [{ role: "user", content: [
+          ...images.map(im => ({ type: "image", source: { type: "base64", media_type: im.mime, data: im.b64 } })),
           { type: "text", text: prompt }
         ] }] }
       };
@@ -1777,13 +1777,13 @@ const AI_PROVIDERS = {
     label: "OpenRouter",
     defaultModel: "openai/gpt-4o-mini",
     hint: "One key for many models (some free ones, marked “:free”) — openrouter.ai/keys. Put any vision-capable model id in the Model field.",
-    build(key, model, b64, mime, prompt){
+    build(key, model, images, prompt){
       return {
         url: "https://openrouter.ai/api/v1/chat/completions",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
         body: { model, temperature: 0, messages: [{ role: "user", content: [
           { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: `data:${mime};base64,${b64}` } }
+          ...images.map(im => ({ type: "image_url", image_url: { url: `data:${im.mime};base64,${im.b64}` } }))
         ] }] }
       };
     },
@@ -1799,8 +1799,23 @@ function aiErrorMessage(data){
 }
 
 const aiLastModelIdx = {};
+
+// Pulls the JSON object out of an AI answer: ignores ``` fences, <think> blocks,
+// chatter before/after the object and trailing commas.
+function parseAiJson(text){
+  const t = String(text || "").replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/```(?:json)?/gi, "").trim();
+  try { return JSON.parse(t); } catch(e) {}
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if(a >= 0 && b > a){
+    try { return JSON.parse(t.slice(a, b + 1).replace(/,\s*([}\]])/g, "$1")); } catch(e) {}
+  }
+  const snip = t.slice(0, 90).replace(/\s+/g, " ");
+  throw new Error(`the AI didn't return valid JSON (it answered: "${snip}${t.length > 90 ? "…" : ""}")`);
+}
 // One provider, with retry + countdown on rate limits / overload / network errors.
-async function callProvider(providerId, file, promptText, { retries = 5, onStatus = null, signal = null } = {}) {
+// `files` = one image or an array of images; ALL of them go out in ONE request.
+async function callProvider(providerId, files, promptText, opts = {}) {
+  const { retries = 5, onStatus = null, signal = null } = opts;
   const prov = AI_PROVIDERS[providerId];
   const apiKey = (state.aiKeys[providerId] || "").trim();
   if (!apiKey) throw new Error(`${prov.label} API key is missing! Add it in Settings.`);
@@ -1810,8 +1825,9 @@ async function callProvider(providerId, file, promptText, { retries = 5, onStatu
   if (!models.length) models.push(prov.defaultModel);
   let mi = Math.min(aiLastModelIdx[providerId] || 0, models.length - 1);
   let switches = 0;
-  const base64Data = await fileToBase64(file);
-  const makeReq = m => prov.build(apiKey, m, base64Data, file.type || "image/jpeg", promptText);
+  const fileList = Array.isArray(files) ? files : [files];
+  const images = await Promise.all(fileList.map(async f => ({ b64: await fileToBase64(f), mime: f.type || "image/jpeg" })));
+  const makeReq = m => prov.build(apiKey, m, images, promptText);
   let req = makeReq(models[mi]);
 
   let delay = 5000; // first retry waits 5s, then 10s, 20s, 40s...
@@ -1861,6 +1877,22 @@ async function callProvider(providerId, file, promptText, { retries = 5, onStatu
 
       const text = prov.parse(data);
       if (!text) throw new Error(`${prov.label} returned an invalid response.`);
+      if (opts.expectJson) {
+        try { parseAiJson(text); }
+        catch (jerr) {
+          // Bad answer (refusal, chatter, cut-off...) — try another model right away, otherwise retry.
+          if (models.length > 1 && switches < models.length - 1) {
+            switches++;
+            const from = models[mi];
+            mi = (mi + 1) % models.length;
+            req = makeReq(models[mi]);
+            if (onStatus) onStatus(`${from} gave an unreadable answer — switching to ${models[mi]}...`);
+            attempt--;
+            continue;
+          }
+          throw jerr; // non-fatal → outer catch waits and retries
+        }
+      }
       aiLastModelIdx[providerId] = mi; // next call starts with the model that just worked
       return text;
 
@@ -1875,9 +1907,59 @@ async function callProvider(providerId, file, promptText, { retries = 5, onStatu
   }
 }
 
+// ---------------------------------------------------------
+// Downscale screenshots before sending them to the AI. Token cost grows with
+// image size (pixels / tiles), so a 1080x2400 phone screenshot costs several
+// times more than needed; the game text stays perfectly readable at ~1600 px
+// on the long side. Images already small enough are sent untouched; anything
+// that goes wrong falls back to the original file.
+// To trade readability for savings, change these two numbers.
+// ---------------------------------------------------------
+const AI_IMG_MAX_SIDE = 1600;   // longest side in px (try 1280 for even cheaper, 2000 for sharper)
+const AI_IMG_JPEG_QUALITY = 0.85;
+
+async function shrinkImageForAi(file) {
+  try {
+    let bmp;
+    if (typeof createImageBitmap === "function") {
+      bmp = await createImageBitmap(file);
+    } else {
+      bmp = await new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+        img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("decode failed")); };
+        img.src = url;
+      });
+    }
+    const w = bmp.width || bmp.naturalWidth, h = bmp.height || bmp.naturalHeight;
+    const longest = Math.max(w, h);
+    if (!w || !h || longest <= AI_IMG_MAX_SIDE) { if (bmp.close) bmp.close(); return file; }
+    const scale = AI_IMG_MAX_SIDE / longest;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(w * scale);
+    canvas.height = Math.round(h * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";                       // JPEG has no transparency
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    if (bmp.close) bmp.close();
+    const blob = await new Promise(res => canvas.toBlob(res, "image/jpeg", AI_IMG_JPEG_QUALITY));
+    return (blob && blob.size < file.size) ? blob : file;   // never make it bigger
+  } catch (e) {
+    console.warn("Image downscale failed, sending original:", e);
+    return file;
+  }
+}
+
 // Uses the selected provider; if "fallback" is on and it fails, tries every
 // other provider that has a key saved.
-async function callAiVision(file, promptText, opts = {}) {
+async function callAiVision(files, promptText, opts = {}) {
+  { // shrink once here, so fallback providers reuse the same small images
+    const list = Array.isArray(files) ? files : [files];
+    files = await Promise.all(list.map(shrinkImageForAi));
+  }
   const hasKey = id => !!(state.aiKeys[id] || "").trim();
   let order = [state.aiProvider];
   if (state.aiFallback) {
@@ -1889,7 +1971,7 @@ async function callAiVision(file, promptText, opts = {}) {
     const id = order[i];
     const more = i < order.length - 1;
     try {
-      return await callProvider(id, file, promptText, { ...opts, retries: more ? 2 : (opts.retries || 5) });
+      return await callProvider(id, files, promptText, { ...opts, retries: more ? 2 : (opts.retries || 5) });
     } catch (err) {
       if (err.name === "AbortError") throw err;
       lastErr = err;
@@ -1929,12 +2011,13 @@ async function runBeforeOcr(files) {
   try {
     let anyRejectedTrophies = false;
     let anyRejectedName = false;
-    for(let i = 0; i < files.length; i++){
-      const file = files[i];
-      statusEl.textContent = `Analyzing image ${i+1} of ${files.length}...`;
+    { // single AI request for ALL pre-fight images
+      statusEl.textContent = `Analyzing ${files.length} image(s) in one AI request...`;
       
       const ourName = (state.ourClanName || "our clan").trim();
       const prompt = `These are pre-fight screenshot(s) from Creatures of the Deep clan war. Our clan's name is literally "${ourName}".
+
+      You may receive SEVERAL images in this one request (standings header, opponent clan card, map/set popup — in any order). Look at ALL of them and combine everything into ONE single JSON object: take each field from whichever image actually shows it, and leave a field empty only if NO image shows it. The rules below apply to each image individually.
 
       The image may ALSO be a map/set screenshot instead of a standings screenshot: it shows the name of the fishing MAP (e.g. "Great Lakes") and the SET of exactly 4 fish names for that map. If so, fill "mapName" and "fishSet" (the 4 fish names exactly as printed, in the order shown, left-to-right/top-to-bottom). A map/set popup has the map name as a title in a purple header and the text "TOURNAMENT FISH!" with 4 fish below; the dimmed background behind it is NOT relevant — for such an image leave ALL other fields null/empty (ourTrophies, ourPosition, opponentName, oppTrophies, oppPosition) and ignore the "#---" next to the trophy icon and the timer. If the image has no map/fish info, set "mapName" to "" and "fishSet" to []. Never invent fish names.
 
@@ -1960,13 +2043,13 @@ async function runBeforeOcr(files) {
       "opponentNameLatin": only if "opponentName" has Japanese/Korean/Chinese/other non-Latin script — give a romanization or short translation; otherwise leave "".
       Leave a field empty/null only if genuinely not visible. Don't invent leagues.`;
       
-      const jsonStr = await callAiVision(file, prompt, {
+      const jsonStr = await callAiVision(files, prompt, {
         signal,
+        expectJson: true,
         onStatus: (msg) => { if(sess === aiSessionId) statusEl.textContent = msg; }
       });
       if(sess !== aiSessionId) return; // day was closed/switched meanwhile
-      const cleanJson = jsonStr.replace(/```json/g, "").replace(/```/g, "").trim();
-      const parsed = JSON.parse(cleanJson);
+      const parsed = parseAiJson(jsonStr);
 
       // Map & fish set. If this image is a map/set popup, apply ONLY that and
       // skip the standings fields: the blurred background of that popup shows
@@ -1981,7 +2064,6 @@ async function runBeforeOcr(files) {
         if(names.length){
           for(let k=1;k<=4;k++) document.getElementById("fish"+k).value = names[k-1] || "";
         }
-        if(mapRaw.trim() && names.length) continue;
       }
 
       // Sanity check: trophy counts in this game never realistically reach
@@ -2093,9 +2175,8 @@ async function runAfterOcr(files) {
   setSaveButtonBusy(true);
 
   try {
-    for(let i = 0; i < files.length; i++){
-      const file = files[i];
-      statusEl.textContent = `Analyzing image ${i+1} of${files.length}...`;
+    { // single AI request for ALL result images
+      statusEl.textContent = `Analyzing ${files.length} image(s) in one AI request...`;
       
       const knownPlayers = state.players.length
         ? `Known player names from this clan (use these EXACT spellings/capitalizations if a name in the image matches one of these, even approximately — do not "correct" or re-capitalize a name that's already on this list): ${state.players.join(", ")}.`
@@ -2103,6 +2184,8 @@ async function runAfterOcr(files) {
 
       const prompt = `This is a clan-war result screenshot from a mobile game. The purple header shows two clans: OUR clan on the LEFT and the opponent on the RIGHT, with a big total score under each (e.g. "8 290" and "0"). Below it, the LEFT column lists OUR clan's players; the right column is the opponent's (often empty).
       ${knownPlayers}
+
+      You may receive SEVERAL screenshots of the SAME result screen in this one request (e.g. the player list scrolled to different positions, so they can overlap). Combine them into ONE single JSON object: the final scores once, and "rows" = the union of all players visible across ALL images, without duplicates (the same rank/player appearing in two images is ONE row).
 
       Rules:
       - "ourFinalScore" = the big total under the LEFT clan; "theirFinalScore" = the big total under the RIGHT clan. Numbers may be grouped with a space ("8 290" means 8290) — return plain integers. If the opponent total is 0 (they did not play), return 0 — never null or empty.
@@ -2120,13 +2203,13 @@ async function runAfterOcr(files) {
         ]
       }`;
       
-      const jsonStr = await callAiVision(file, prompt, {
+      const jsonStr = await callAiVision(files, prompt, {
         signal,
+        expectJson: true,
         onStatus: (msg) => { if(sess === aiSessionId) statusEl.textContent = msg; }
       });
       if(sess !== aiSessionId) return; // day was closed/switched meanwhile
-      const cleanJson = jsonStr.replace(/```json/g, "").replace(/```/g, "").trim();
-      const parsed = JSON.parse(cleanJson);
+      const parsed = parseAiJson(jsonStr);
 
       // NOTE: 0 is a valid score (opponent didn't play), so don't use a
       // plain truthiness check here — only skip null/undefined/empty string.
@@ -2166,7 +2249,7 @@ async function runAfterOcr(files) {
       }
     }
     updateResultPreview(); // also refreshes the score check below the players table
-    statusEl.textContent = "Done — AI processed all images. Check the score verification below the players table.";
+    statusEl.textContent = "Done — AI processed all images in one request. Check the score verification below the players table.";
   } catch(err) {
     if(err.name === "AbortError" || sess !== aiSessionId) return;
     statusEl.textContent = "Error: " + err.message;
