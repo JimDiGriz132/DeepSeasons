@@ -109,6 +109,14 @@ Object.defineProperty(state, "leftPlayers", {
   },
   set(v){ if(clanStore.clans[state.ourClanName]) clanStore.clans[state.ourClanName].leftPlayers = v; }
 });
+// Logo of the ACTIVE clan: a small square JPEG data URL (or "").
+Object.defineProperty(state, "clanLogo", {
+  get(){
+    const c = clanStore.clans[state.ourClanName];
+    return c && typeof c.logo === "string" ? c.logo : "";
+  },
+  set(v){ if(clanStore.clans[state.ourClanName]) clanStore.clans[state.ourClanName].logo = v || ""; }
+});
 function hasLeft(name){
   const n = String(name).toLowerCase();
   return state.leftPlayers.some(x => String(x).toLowerCase() === n);
@@ -121,7 +129,7 @@ function saveData(){
   clanStore.aiKeys = state.aiKeys;
   clanStore.aiModels = state.aiModels;
   clanStore.aiFallback = state.aiFallback;
-  clanStore.clans[state.ourClanName] = { players: state.players, fights: state.fights, restMonths: state.restMonths, leftPlayers: state.leftPlayers };
+  clanStore.clans[state.ourClanName] = { players: state.players, fights: state.fights, restMonths: state.restMonths, leftPlayers: state.leftPlayers, logo: state.clanLogo };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(clanStore));
 }
 
@@ -155,8 +163,9 @@ async function remoteSaveClanCol(clan, col, value, label){
 }
 function remoteSaveRestMonths(clan, v){ return remoteSaveClanCol(clan, "rest_months", v, "rest months"); }
 function remoteSaveLeftPlayers(clan, v){ return remoteSaveClanCol(clan, "left_players", v, "the left-clan list"); }
+function remoteSaveLogo(clan, v){ return remoteSaveClanCol(clan, "logo", v, "the clan logo"); }
 async function remoteLoadAll(){
-  const optional = ["rest_months", "left_players"];
+  const optional = ["rest_months", "left_players", "logo"];
   let clansRes;
   for(let attempt = 0; attempt <= optional.length; attempt++){
     const cols = ["name", "players", ...optional.filter(c => !missingClanCols.has(c))].join(",");
@@ -174,7 +183,8 @@ async function remoteLoadAll(){
       players: Array.isArray(r.players) ? r.players : [],
       fights: {},
       restMonths: Array.isArray(r.rest_months) ? r.rest_months : [],
-      leftPlayers: Array.isArray(r.left_players) ? r.left_players : []
+      leftPlayers: Array.isArray(r.left_players) ? r.left_players : [],
+      logo: typeof r.logo === "string" ? r.logo : ""
     };
   });
   // PostgREST returns max 1000 rows per request, so page through.
@@ -228,6 +238,9 @@ async function remoteSyncClan(clan, data, { prune = false } = {}){
   await remoteUpsertFights(clan, data.fights);
   if(Array.isArray(data.restMonths) && data.restMonths.length){
     try{ await remoteSaveRestMonths(clan, data.restMonths); }catch(e){ console.warn(e); }
+  }
+  if(data.logo){
+    try{ await remoteSaveLogo(clan, data.logo); }catch(e){ console.warn(e); }
   }
   if(Array.isArray(data.leftPlayers) && data.leftPlayers.length){
     try{ await remoteSaveLeftPlayers(clan, data.leftPlayers); }catch(e){ console.warn(e); }
@@ -289,6 +302,7 @@ async function loadFromRemote(){
       if(!old) return;
       if(missingClanCols.has("rest_months") && Array.isArray(old.restMonths)) remoteClans[n].restMonths = old.restMonths;
       if(missingClanCols.has("left_players") && Array.isArray(old.leftPlayers)) remoteClans[n].leftPlayers = old.leftPlayers;
+      if(missingClanCols.has("logo") && old.logo) remoteClans[n].logo = old.logo;
     });
     clanStore.clans = remoteClans;
     const active = remoteClans[prevActive] ? prevActive : names.sort((a,b)=> a.localeCompare(b))[0];
@@ -355,7 +369,7 @@ function switchClan(name){
 
 // Creates a brand-new, empty clan dataset (or just switches to it if a
 // clan with that name — case-insensitively — already exists).
-async function addClan(nameRaw){
+async function addClan(nameRaw, logo){
   const name = (nameRaw || "").trim();
   if(!name) return;
   const existing = Object.keys(clanStore.clans).find(c => c.toLowerCase() === name.toLowerCase());
@@ -369,6 +383,12 @@ async function addClan(nameRaw){
   }
   clanStore.clans[name] = { players: [], fights: {} };
   switchClan(name);
+  if(logo){
+    state.clanLogo = logo;
+    saveData();
+    refreshClanLogoUI();
+    bgSync(() => remoteSaveLogo(name, logo));
+  }
 }
 
 // Permanently removes a clan (and all its players/fights) from the store.
@@ -418,6 +438,7 @@ function renderClanSelect(){
   });
   const quick = document.getElementById("quickClanSelect");
   if(quick) quick.style.display = names.length > 1 ? "" : "none";
+  refreshClanLogoUI();
 }
 
 normalizePlayerCasing();
@@ -922,7 +943,8 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
               players: unionPlayers(cur ? cur.players : [], c.players || []),
               fights: Object.assign({}, cur ? cur.fights : {}, c.fights || {}),
               restMonths: [...new Set([...(cur && cur.restMonths || []), ...(c.restMonths || [])])].sort(),
-              leftPlayers: [...new Set([...(cur && cur.leftPlayers || []), ...(c.leftPlayers || [])])]
+              leftPlayers: [...new Set([...(cur && cur.leftPlayers || []), ...(c.leftPlayers || [])])],
+              logo: (c && c.logo) || (cur && cur.logo) || ""
             };
             await remoteSyncClan(name, data);
           }
@@ -995,8 +1017,12 @@ document.getElementById("deleteClanBtn").addEventListener("click", ()=>{
 });
 document.getElementById("addClanBtn").addEventListener("click", ()=>{
   const input = document.getElementById("newClanNameInput");
-  addClan(input.value);
+  const logo = newClanLogo;
+  addClan(input.value, logo);
   input.value = "";
+  newClanLogo = "";
+  refreshNewClanLogoUI();
+  if(typeof refreshNewClanLogoBtnHint === "function") refreshNewClanLogoBtnHint();
 });
 document.getElementById("newClanNameInput").addEventListener("keydown", (e)=>{
   if(e.key === "Enter"){
@@ -2865,7 +2891,9 @@ function anConsistency(el, id, groups, nameFn, firstLabel, extraCol){
 }
 
 // ---- players ---------------------------------------------------------------
+let anPlayersList = [];
 function anPlayers(list){
+  anPlayersList = list;
   const m = new Map();
   list.forEach(x => {
     Object.entries(x.playerScores).forEach(([name, sc]) => {
@@ -2887,7 +2915,7 @@ function anPlayers(list){
     };
   });
   anTable(anEl("anPlayers"), "players", [
-    { k: "name", label: "Player", left: true },
+    { k: "name", label: "Player", left: true, cls: () => "an-player-name" },
     { k: "n", label: "Fights" },
     { k: "avg", label: "Avg score", f: r => anFmtN(r.avg) },
     { k: "best", label: "Best score", f: r => anFmtN(r.best) + (r.bestDate ? ` (${anFmtDate(r.bestDate)})` : ""), onCell: r => anOpenFight(r.bestDate), cellOk: r => !!r.bestDate },
@@ -2896,6 +2924,93 @@ function anPlayers(list){
     { k: "top5", label: "Top-5 finishes" }
   ], rows, "avg", "desc");
 }
+
+// ---- hover chart: a player's placement over time ------------------------------------
+function anPlayerSeries(name){
+  const out = [];
+  anPlayersList.forEach(x => {
+    const r = x.playerRanks[name];
+    if(typeof r !== "number") return;
+    out.push({ date: x.date, rank: r, res: x.res });
+  });
+  return out;
+}
+let anPlayerTipW = 380;
+function anPlayerChartHtml(name){
+  const s = anPlayerSeries(name);
+  anPlayerTipW = 380;
+  const head = `<div class="pt-name">${escapeHtml(name)} — placement over time</div>`;
+  if(s.length < 2) return head + `<div class="pt-note">${s.length ? "Only 1 fight" : "No fights"} in this view — not enough for a chart.</div>`;
+  const n = s.length;
+  const W = Math.min(window.innerWidth - 40, Math.max(380, Math.min(1000, 70 + n * 12)));
+  const H = 190, pl = 34, pr = 10, pt = 10, pb = 24;
+  anPlayerTipW = W + 24;
+  const maxR = Math.max(...s.map(p => p.rank));
+  const lo = 0.7, hi = Math.max(maxR, 5) + 0.3;
+  const Y = v => pt + (H - pt - pb) * (v - lo) / (hi - lo);
+  const X = i => pl + (W - pl - pr) * i / (s.length - 1);
+  const step = hi <= 11 ? 1 : hi <= 21 ? 5 : 10;
+  const ticks = [1];
+  for(let v = step; v <= Math.max(maxR, 5); v += step) if(v > 1) ticks.push(v);
+  let grid = `<rect x="${pl}" y="${pt}" width="${W - pl - pr}" height="${Y(5.5) - pt}" fill="#7cb648" fill-opacity="0.12"/>` +
+             `<text x="${W - pr - 4}" y="${pt + 11}" text-anchor="end" font-size="10" fill="#5a8a2c">top 5 (counts)</text>`;
+  ticks.forEach(v => {
+    grid += `<line x1="${pl}" x2="${W - pr}" y1="${Y(v)}" y2="${Y(v)}" stroke="#e3e6ea" stroke-width="0.7"/>` +
+            `<text x="${pl - 6}" y="${Y(v) + 3.5}" text-anchor="end" font-size="10" fill="#888">#${v}</text>`;
+  });
+  const col = r => r === "WIN" ? "#7cb648" : r === "LOSS" ? "#e08b3a" : r === "DRAW" ? "#9aa1ab" : "#3d6fd6";
+  const smooth = n >= 8;
+  const line = `<polyline fill="none" stroke="#3d6fd6" stroke-opacity="${smooth ? 0.4 : 1}" stroke-width="${smooth ? 1.2 : 1.8}" points="${s.map((p, i) => X(i).toFixed(1) + "," + Y(p.rank).toFixed(1)).join(" ")}"/>`;
+  const MA = 5;
+  const ma = smooth
+    ? `<polyline fill="none" stroke="#1f3f8f" stroke-width="2.6" stroke-linejoin="round" points="${s.map((p, i) => {
+        const w = s.slice(Math.max(0, i - MA + 1), i + 1);
+        return X(i).toFixed(1) + "," + Y(w.reduce((a, q) => a + q.rank, 0) / w.length).toFixed(1);
+      }).join(" ")}"/>`
+    : "";
+  const dr = n > 60 ? 2.2 : n > 30 ? 2.8 : 3.6;
+  const dots = s.map((p, i) => `<circle cx="${X(i).toFixed(1)}" cy="${Y(p.rank).toFixed(1)}" r="${dr}" fill="${col(p.res)}" stroke="#fff" stroke-width="0.8"/>`).join("");
+  const xl = `<text x="${pl}" y="${H - 7}" text-anchor="start" font-size="10" fill="#888">${anFmtDate(s[0].date)}</text>` +
+             `<text x="${W - pr}" y="${H - 7}" text-anchor="end" font-size="10" fill="#888">${anFmtDate(s[s.length - 1].date)}</text>`;
+  const avg = s.reduce((a, p) => a + p.rank, 0) / s.length;
+  const best = Math.min(...s.map(p => p.rank));
+  return head +
+    `<div class="pt-meta">${s.length} fights · avg rank ${avg.toFixed(1)} · best #${best} · latest #${s[s.length - 1].rank}</div>` +
+    `<svg viewBox="0 0 ${W} ${H}" class="pt-svg">${grid}${line}${dots}${ma}${xl}</svg>` +
+    `<div class="pt-note">#1 is at the top. One dot per fight (evenly spaced); dot colour = fight result (green win, orange loss, grey draw).${smooth ? ` Dark line = average of the last ${MA} fights.` : ""} Follows the filters above.</div>`;
+}
+(function(){
+  const box = anEl("anPlayers");
+  if(!box) return;
+  let tip = null, cur = null;
+  const getTip = () => {
+    if(!tip){ tip = document.createElement("div"); tip.className = "an-player-tip"; document.body.appendChild(tip); }
+    return tip;
+  };
+  const place = ev => {
+    const t = getTip(), w = t.offsetWidth, h = t.offsetHeight;
+    let left = ev.clientX + 16;
+    if(left + w > window.innerWidth - 8) left = ev.clientX - w - 16;
+    let top = ev.clientY - h / 2;
+    top = Math.max(8, Math.min(top, window.innerHeight - h - 8));
+    t.style.left = Math.max(8, left) + "px";
+    t.style.top = top + "px";
+  };
+  const hide = () => { cur = null; if(tip) tip.style.display = "none"; };
+  box.addEventListener("mouseover", ev => {
+    const td = ev.target.closest("td.an-player-name");
+    if(!td || td === cur) return;
+    cur = td;
+    const t = getTip();
+    t.innerHTML = anPlayerChartHtml(td.textContent.trim());
+    t.style.width = anPlayerTipW + "px";
+    t.style.display = "block";
+    place(ev);
+  });
+  box.addEventListener("mousemove", ev => { if(cur) place(ev); });
+  box.addEventListener("mouseout", ev => { if(ev.target.closest("td.an-player-name")) hide(); });
+  window.addEventListener("scroll", hide, true);
+})();
 
 // ---- opponents / head-to-head -----------------------------------------------
 function anOpponents(list){
@@ -3050,3 +3165,439 @@ renderPlayersManageList();
   await refreshAdmin();
   await loadFromRemote();
 })();
+
+// =====================================================================
+// CLAN LOGO (picked + cropped in the browser, stored as a small JPEG data URL)
+// =====================================================================
+let newClanLogo = "";
+
+function setLogoImg(img, src){
+  if(!img) return;
+  if(src){ img.src = src; img.classList.remove("hidden"); }
+  else { img.removeAttribute("src"); img.classList.add("hidden"); }
+}
+function refreshClanLogoUI(){
+  const logo = state.clanLogo;
+  setLogoImg(document.getElementById("clanLogoPreview"), logo);
+  setLogoImg(document.getElementById("brandLogo"), logo);
+  const rm = document.getElementById("clanLogoRemoveBtn");
+  if(rm) rm.classList.toggle("hidden", !logo);
+  const emoji = document.getElementById("brandEmoji");
+  if(emoji) emoji.classList.toggle("hidden", !!logo);
+}
+function refreshNewClanLogoUI(){
+  setLogoImg(document.getElementById("newClanLogoPreview"), newClanLogo);
+}
+
+// Opens the file chooser, then the crop dialog. Resolves with a data URL, or null.
+function pickClanLogo(){
+  return new Promise(resolve => {
+    const input = document.getElementById("logoFileInput");
+    input.value = "";
+    input.onchange = () => {
+      const file = input.files && input.files[0];
+      if(!file) return resolve(null);
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); openLogoCrop(img, resolve); };
+      img.onerror = () => { URL.revokeObjectURL(url); alert("Couldn't read that image."); resolve(null); };
+      img.src = url;
+    };
+    input.click();
+  });
+}
+
+function openLogoCrop(img, done){
+  const modal = document.getElementById("logoCropModal");
+  const cv = document.getElementById("logoCropCanvas");
+  const ctx = cv.getContext("2d");
+  const zoomEl = document.getElementById("logoZoom");
+  const S = cv.width, M = 6; // M = margin between canvas edge and the crop circle
+  const base = S / Math.min(img.width, img.height);
+  let z = 1, ox = 0, oy = 0;
+  const dims = () => ({ w: img.width * base * z, h: img.height * base * z });
+  const clamp = () => {
+    const d = dims();
+    ox = Math.min(0, Math.max(S - d.w, ox));
+    oy = Math.min(0, Math.max(S - d.h, oy));
+  };
+  const draw = () => {
+    clamp();
+    const d = dims();
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, S, S);
+    ctx.drawImage(img, ox, oy, d.w, d.h);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, S, S);
+    ctx.arc(S / 2, S / 2, S / 2 - M, 0, Math.PI * 2, true);
+    ctx.fillStyle = "rgba(0,0,0,.55)";
+    ctx.fill("evenodd");
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(S / 2, S / 2, S / 2 - M, 0, Math.PI * 2);
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  };
+  // start top-aligned (the round badge is usually at the top, the name text below it)
+  z = 1; zoomEl.value = "1";
+  ox = (S - dims().w) / 2; oy = 0;
+  draw();
+
+  let drag = null;
+  cv.onpointerdown = e => { drag = { x: e.clientX, y: e.clientY, ox, oy }; cv.setPointerCapture(e.pointerId); };
+  cv.onpointermove = e => {
+    if(!drag) return;
+    const k = S / cv.getBoundingClientRect().width;
+    ox = drag.ox + (e.clientX - drag.x) * k;
+    oy = drag.oy + (e.clientY - drag.y) * k;
+    draw();
+  };
+  cv.onpointerup = cv.onpointercancel = () => { drag = null; };
+  zoomEl.oninput = () => {
+    const cx = (S / 2 - ox) / (base * z), cy = (S / 2 - oy) / (base * z); // image point under the centre
+    z = Number(zoomEl.value);
+    ox = S / 2 - cx * base * z;
+    oy = S / 2 - cy * base * z;
+    draw();
+  };
+  const close = result => { modal.classList.add("hidden"); cv.onpointerdown = cv.onpointermove = cv.onpointerup = cv.onpointercancel = null; done(result); };
+  document.getElementById("logoCropClose").onclick = () => close(null);
+  document.getElementById("logoCropOk").onclick = () => {
+    clamp();
+    const d = dims(), OUT = 256, k = OUT / (S - 2 * M);
+    const out = document.createElement("canvas");
+    out.width = out.height = OUT;
+    const c2 = out.getContext("2d");
+    c2.fillStyle = "#fff";
+    c2.fillRect(0, 0, OUT, OUT);
+    c2.drawImage(img, (ox - M) * k, (oy - M) * k, d.w * k, d.h * k);
+    close(out.toDataURL("image/jpeg", 0.88));
+  };
+  modal.classList.remove("hidden");
+}
+
+function applyLogoToSelectedClan(data){
+  const clan = state.ourClanName;
+  state.clanLogo = data;
+  saveData();
+  refreshClanLogoUI();
+  bgSync(() => remoteSaveLogo(clan, data));
+}
+document.getElementById("clanLogoBtn").addEventListener("click", async () => {
+  const data = await pickClanLogo();
+  if(!data) return;
+  applyLogoToSelectedClan(data);
+});
+document.getElementById("clanLogoRemoveBtn").addEventListener("click", () => {
+  const clan = state.ourClanName;
+  state.clanLogo = "";
+  saveData();
+  refreshClanLogoUI();
+  bgSync(() => remoteSaveLogo(clan, ""));
+});
+// The "Logo" button next to the new-clan name box is context-aware:
+//  - name box empty  -> the picked logo is applied straight to the selected (existing) clan
+//  - name typed in   -> the logo is kept for the new clan and used when "+ Add Clan" is pressed
+const newClanNameInputEl = document.getElementById("newClanNameInput");
+const newClanLogoBtnEl = document.getElementById("newClanLogoBtn");
+function refreshNewClanLogoBtnHint(){
+  const creating = !!newClanNameInputEl.value.trim();
+  newClanLogoBtnEl.title = creating
+    ? "Pick a logo for the new clan you are adding"
+    : "Pick a logo for the selected clan (type a new clan name first to set it for the new clan instead)";
+}
+newClanNameInputEl.addEventListener("input", refreshNewClanLogoBtnHint);
+refreshNewClanLogoBtnHint();
+newClanLogoBtnEl.addEventListener("click", async () => {
+  const data = await pickClanLogo();
+  if(!data) return;
+  if(newClanNameInputEl.value.trim()){
+    newClanLogo = data;
+    refreshNewClanLogoUI();
+  } else {
+    applyLogoToSelectedClan(data);
+  }
+});
+refreshClanLogoUI();
+
+// =====================================================================
+// MONTH RECAP — a shareable portrait PNG: clan numbers + friendly shout-outs.
+// Shout-outs compare players with THEMSELVES or reward showing up; there is no
+// leaderboard and nobody is ever listed as "worst".
+// =====================================================================
+const RECAP_ITEMS = [
+  { k: "avg", label: "Average clan score" },
+  { k: "bigwin", label: "Biggest win" },
+  { k: "closewin", label: "Closest win" },
+  { k: "closeloss", label: "Closest loss" },
+  { k: "best", label: "Best clan score" },
+  { k: "streak", label: "Longest win streak" },
+  { k: "trophies", label: "Trophies" },
+  { k: "position", label: "League position" },
+  { k: "map", label: "Most frequent map" },
+  { k: "toughest", label: "Toughest opponent" },
+  { k: "players", label: "Players in action" },
+  { k: "rising", label: "🌟 Rising Star" },
+  { k: "iron", label: "🎣 Iron Angler" },
+  { k: "fresh", label: "🐟 Fresh Fin" }
+];
+const recapOff = new Set();
+let recapKey = "";
+
+function recapPrevKey(key){
+  const [y, m] = key.split("-").map(Number);
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, "0")}`;
+}
+function recapMonthName(key){
+  const [y, m] = key.split("-").map(Number);
+  return `${MONTHS[m - 1]} ${y}`;
+}
+function recapMonthOptions(){
+  const seen = new Set();
+  anCollectRaw().forEach(x => { if(x.scored) seen.add(x.monthKey); });
+  return [...seen].sort().reverse();
+}
+function recapNameList(arr, max){
+  return arr.length <= max ? arr.join(", ") : arr.slice(0, max).join(", ") + ` +${arr.length - max} more`;
+}
+// per player: fights played and average score (only fights where a score was read)
+function recapPlayerStats(list){
+  const m = new Map();
+  list.forEach(x => Object.keys(x.playerRanks || {}).forEach(name => {
+    const o = m.get(name) || { n: 0, sum: 0, sc: 0 };
+    o.n++;
+    const s = parseScoreVal((x.playerScores || {})[name]);
+    if(s != null){ o.sum += s; o.sc++; }
+    m.set(name, o);
+  }));
+  return m;
+}
+
+function recapBuild(key){
+  const all = anCollectRaw();
+  const cur = all.filter(x => x.monthKey === key);
+  const curS = cur.filter(x => x.scored);
+  const prevKey = recapPrevKey(key);
+  const prev = all.filter(x => x.monthKey === prevKey);
+  const prevS = prev.filter(x => x.scored);
+  const prevName = recapMonthName(prevKey).split(" ")[0];
+  const fmtD = d => `${d.getDate()} ${anMonthsShort[d.getMonth()]}`;
+  const vs = x => `${x.opp ? "vs " + x.opp : "vs opponent"} · ${fmtD(x.date)}`;
+  const margin = x => Math.abs(x.our - x.their);
+  const out = { key, name: recapMonthName(key), n: curS.length, isRest: !!(curS[0] && curS[0].isRest), tiles: [], awards: [] };
+  if(!curS.length) return out;
+  const tile = (k, label, value, sub) => out.tiles.push({ k, label, value, sub: sub || "" });
+
+  const wins = curS.filter(x => x.res === "WIN");
+  const draws = curS.filter(x => x.res === "DRAW");
+  const losses = curS.filter(x => x.res === "LOSS");
+  out.w = wins.length; out.d = draws.length; out.l = losses.length;
+  out.winPct = wins.length / curS.length * 100;
+
+  // --- clan numbers ---
+  const avg = curS.reduce((s, x) => s + x.our, 0) / curS.length;
+  let avgSub = "";
+  if(prevS.length){
+    const pa = prevS.reduce((s, x) => s + x.our, 0) / prevS.length;
+    if(pa > 0){
+      const ch = (avg - pa) / pa * 100;
+      avgSub = `${ch >= 0 ? "+" : "−"}${Math.abs(ch).toFixed(1)}% vs ${prevName}`;
+    }
+  }
+  tile("avg", "AVERAGE CLAN SCORE", anFmtN(avg), avgSub);
+
+  let big = null;
+  if(wins.length){
+    big = wins.reduce((a, b) => margin(b) > margin(a) ? b : a);
+    tile("bigwin", "BIGGEST WIN", "+" + anFmtN(margin(big)), vs(big));
+  }
+  if(wins.length > 1){
+    const cl = wins.reduce((a, b) => margin(b) < margin(a) ? b : a);
+    if(cl !== big) tile("closewin", "CLOSEST WIN", "+" + anFmtN(margin(cl)), vs(cl));
+  }
+  if(losses.length){
+    const cl = losses.reduce((a, b) => margin(b) < margin(a) ? b : a);
+    tile("closeloss", "CLOSEST LOSS", "−" + anFmtN(margin(cl)), vs(cl));
+  }
+  const bestFight = curS.reduce((a, b) => b.our > a.our ? b : a);
+  tile("best", "BEST CLAN SCORE", anFmtN(bestFight.our), vs(bestFight));
+
+  let streak = { len: 0, from: null, to: null }, run = 0, from = null;
+  curS.forEach(x => {
+    if(x.res === "WIN"){
+      if(run === 0) from = x;
+      run++;
+      if(run > streak.len) streak = { len: run, from, to: x };
+    } else run = 0;
+  });
+  if(streak.len >= 2) tile("streak", "LONGEST WIN STREAK", `${streak.len} wins`, `${fmtD(streak.from.date)} – ${fmtD(streak.to.date)}`);
+
+  const tr = cur.filter(x => x.trophies != null);
+  if(tr.length >= 2){
+    const a = tr[0], b = tr[tr.length - 1];
+    tile("trophies", "TROPHIES", anFmtSigned(b.trophies - a.trophies), `${anFmtN(a.trophies)} → ${anFmtN(b.trophies)}`);
+  }
+  const ps = cur.filter(x => x.position != null);
+  if(ps.length >= 2){
+    const a = ps[0], b = ps[ps.length - 1];
+    tile("position", "LEAGUE POSITION", `#${a.position} → #${b.position}`, b.league ? b.league + " league" : "");
+  }
+
+  const mapCnt = new Map();
+  cur.forEach(x => { if(x.map) mapCnt.set(x.map, (mapCnt.get(x.map) || 0) + 1); });
+  if(mapCnt.size){
+    const [mn, c] = [...mapCnt.entries()].sort((a, b) => b[1] - a[1])[0];
+    tile("map", "MOST FREQUENT MAP", mn, `${c} of ${cur.filter(x => x.map).length} fights`);
+  }
+  const withOpp = curS.filter(x => x.opp);
+  if(withOpp.length){
+    const t = withOpp.reduce((a, b) => b.their > a.their ? b : a);
+    tile("toughest", "TOUGHEST OPPONENT", t.opp, `${anFmtN(t.their)} vs our ${anFmtN(t.our)}`);
+  }
+
+  // --- players ---
+  const stats = recapPlayerStats(cur);
+  const perFight = cur.map(x => Object.keys(x.playerRanks || {}).length).filter(n => n > 0);
+  if(stats.size && perFight.length){
+    tile("players", "PLAYERS IN ACTION", String(stats.size), `avg ${(perFight.reduce((a, b) => a + b, 0) / perFight.length).toFixed(1)} per fight`);
+  }
+
+  // --- shout-outs ---
+  const prevStats = recapPlayerStats(prev);
+  let rising = null;
+  stats.forEach((o, name) => {
+    const p = prevStats.get(name);
+    if(!p || o.n < 3 || p.n < 3 || o.sc < 3 || p.sc < 3) return;
+    const ca = o.sum / o.sc, pa = p.sum / p.sc;
+    if(pa <= 0) return;
+    const ch = (ca - pa) / pa * 100;
+    if(ch > 0 && (!rising || ch > rising.ch)) rising = { name, ch };
+  });
+  if(rising) out.awards.push({ k: "rising", icon: "🌟", title: "RISING STAR", who: rising.name, desc: `+${Math.round(rising.ch)}% average score vs ${prevName}` });
+
+  let max = 0;
+  stats.forEach(o => { if(o.n > max) max = o.n; });
+  if(max >= 2){
+    let winners = [...stats.entries()].filter(([, o]) => o.n === max).map(([nm]) => nm).sort();
+    const others = winners.filter(nm => !rising || nm !== rising.name);
+    if(others.length) winners = others; // keep the awards spread over different people
+    out.awards.push({
+      k: "iron", icon: "🎣", title: "IRON ANGLER", who: recapNameList(winners, 10),
+      desc: winners.length > 1 ? `each fished ${max} of ${cur.length} fights` : `fished ${max} of ${cur.length} fights`
+    });
+  }
+
+  const firstSeen = new Map();
+  all.forEach(x => Object.keys(x.playerRanks || {}).forEach(nm => { if(!firstSeen.has(nm)) firstSeen.set(nm, x.monthKey); }));
+  if(all.length && all[0].monthKey < key){ // otherwise everybody would look "new"
+    const fresh = [...firstSeen.entries()].filter(([, mk]) => mk === key).map(([nm]) => nm).sort();
+    if(fresh.length) out.awards.push({ k: "fresh", icon: "🐟", title: "FRESH FIN", who: recapNameList(fresh, 16), desc: "new on the scoreboard this month — welcome aboard!" });
+  }
+  return out;
+}
+
+function recapCardHtml(data){
+  const esc = escapeHtml;
+  const logo = state.clanLogo;
+  const logoHtml = logo ? `<img class="rc-logo" src="${logo}" alt="">` : `<div class="rc-logo rc-logo-emoji">🎣</div>`;
+  const tiles = data.tiles.filter(t => !recapOff.has(t.k));
+  const awards = data.awards.filter(a => !recapOff.has(a.k));
+  const rec = `${data.w}W` + (data.d ? ` · ${data.d}D` : "") + ` · ${data.l}L`;
+  return `<div class="rc-card">
+    <div class="rc-head">${logoHtml}
+      <div class="rc-head-txt"><div class="rc-clan">${esc(state.ourClanName)}</div><div class="rc-month">Clan Wars · ${esc(data.name)}</div></div>
+    </div>
+    <div class="rc-record">
+      <div class="rc-rec-big">${rec}</div>
+      <div class="rc-rec-sub">${data.n} fights · ${Math.round(data.winPct)}% win rate</div>
+    </div>
+    ${tiles.length ? `<div class="rc-tiles">${tiles.map(t => `<div class="rc-tile"><div class="rc-tl">${esc(t.label)}</div><div class="rc-tv">${esc(t.value)}</div><div class="rc-ts">${esc(t.sub)}</div></div>`).join("")}</div>` : ""}
+    ${awards.length ? `<div class="rc-section">Shout-outs</div>` + awards.map(a => `<div class="rc-award"><div class="rc-ico">${a.icon}</div><div class="rc-atxt"><div class="rc-atitle">${esc(a.title)}</div><div class="rc-awho${a.who.length > 90 ? " rc-awho-xs" : a.who.length > 38 ? " rc-awho-sm" : ""}">${esc(a.who)}</div><div class="rc-adesc">${esc(a.desc)}</div></div></div>`).join("") : ""}
+    <div class="rc-foot">Every fight counts — thank you all! 🎣</div>
+  </div>`;
+}
+
+function recapFit(){
+  const wrap = document.getElementById("recapPreviewWrap");
+  const card = document.querySelector("#recapCard .rc-card");
+  if(!wrap || !card) { if(wrap) wrap.style.height = "0px"; return; }
+  const s = wrap.clientWidth / card.offsetWidth;
+  card.style.transformOrigin = "top left";
+  card.style.transform = `scale(${s})`;
+  wrap.style.height = Math.ceil(card.offsetHeight * s) + "px";
+}
+
+function recapRender(){
+  const key = document.getElementById("recapMonth").value;
+  recapKey = key;
+  const data = recapBuild(key);
+  const msg = document.getElementById("recapMsg");
+  const dl = document.getElementById("recapDownload");
+  const holder = document.getElementById("recapCard");
+  if(!data.n){
+    msg.textContent = "No finished fights in this month.";
+    holder.innerHTML = "";
+    dl.disabled = true;
+    recapFit();
+    return;
+  }
+  msg.textContent = data.isRest ? "Note: this month is marked as a rest month." : "";
+  holder.innerHTML = recapCardHtml(data);
+  dl.disabled = false;
+  recapFit();
+}
+
+function openRecap(){
+  const months = recapMonthOptions();
+  if(!months.length){ alert("No finished fights yet."); return; }
+  const sel = document.getElementById("recapMonth");
+  sel.innerHTML = months.map(k => `<option value="${k}">${recapMonthName(k)}</option>`).join("");
+  const wanted = `${tableYear}-${String(tableMonth + 1).padStart(2, "0")}`;
+  sel.value = months.includes(wanted) ? wanted : months[0];
+  const tg = document.getElementById("recapToggles");
+  tg.innerHTML = RECAP_ITEMS.map(it => `<label class="recap-toggle"><input type="checkbox" data-k="${it.k}" ${recapOff.has(it.k) ? "" : "checked"}> ${it.label}</label>`).join("");
+  tg.querySelectorAll("input").forEach(cb => cb.addEventListener("change", () => {
+    if(cb.checked) recapOff.delete(cb.dataset.k); else recapOff.add(cb.dataset.k);
+    recapRender();
+  }));
+  document.getElementById("recapModal").classList.remove("hidden");
+  recapRender();
+}
+
+async function recapDownload(){
+  const src = document.querySelector("#recapCard .rc-card");
+  if(!src) return;
+  const btn = document.getElementById("recapDownload");
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Rendering…";
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-20000px;top:0;";
+  const clone = src.cloneNode(true);
+  clone.style.transform = "none";
+  host.appendChild(clone);
+  document.body.appendChild(host);
+  try{
+    const canvas = await html2canvas(clone, { backgroundColor: null, scale: 1, useCORS: true });
+    const slug = state.ourClanName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "clan";
+    const link = document.createElement("a");
+    link.download = `${slug}-recap-${recapKey}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }catch(err){
+    alert("PNG export failed: " + err.message);
+  }finally{
+    host.remove();
+    btn.textContent = label;
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("recapBtn").addEventListener("click", openRecap);
+document.getElementById("recapClose").addEventListener("click", () => document.getElementById("recapModal").classList.add("hidden"));
+document.getElementById("recapModal").addEventListener("click", ev => { if(ev.target.id === "recapModal") ev.currentTarget.classList.add("hidden"); });
+document.getElementById("recapMonth").addEventListener("change", recapRender);
+document.getElementById("recapDownload").addEventListener("click", recapDownload);
+window.addEventListener("resize", recapFit);

@@ -357,3 +357,69 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .fv-table td.left{text-align:left;}
 .fv-table tr.fv-top td{font-weight:700;}
 @media (max-width:640px){ .fv-grid{grid-template-columns:1fr;} }
+
+/* ===== Player placement hover chart ===== */
+.an-table td.an-player-name{cursor:help;}
+.an-player-tip{position:fixed;display:none;z-index:80;width:380px;max-width:calc(100vw - 16px);background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.2);padding:10px 12px;pointer-events:none;}
+.an-player-tip .pt-name{font-weight:800;font-size:.9rem;}
+.an-player-tip .pt-meta{font-size:.76rem;color:#555;margin:2px 0 4px;}
+.an-player-tip .pt-note{font-size:.72rem;color:var(--gray);margin-top:4px;}
+.an-player-tip .pt-svg{width:100%;height:auto;display:block;}
+
+/* ===== generic helper ===== */
+.hidden{display:none !important;}
+
+/* ===== Clan logo ===== */
+.brand-logo{width:34px;height:34px;border-radius:50%;vertical-align:middle;margin-right:8px;object-fit:cover;}
+.clan-logo-row{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;}
+.clan-logo-thumb{width:40px;height:40px;border-radius:50%;object-fit:cover;border:1px solid var(--border);}
+.logo-crop-body{display:flex;flex-direction:column;align-items:center;gap:6px;padding-bottom:18px;}
+#logoCropCanvas{width:100%;max-width:300px;height:auto;aspect-ratio:1;border-radius:10px;cursor:grab;touch-action:none;background:#fff;}
+.logo-crop-body label{font-size:.85rem;font-weight:600;display:flex;gap:8px;align-items:center;}
+
+/* ===== Month recap (modal) ===== */
+.recap-modal{max-width:760px;}
+.recap-month-pick{display:block;font-weight:600;font-size:.9rem;margin:12px 0 6px;}
+.recap-month-pick select{padding:7px 10px;border:1px solid var(--border);border-radius:8px;margin-left:8px;}
+.recap-toggles{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;margin-bottom:6px;}
+.recap-toggle{display:flex;align-items:center;gap:5px;cursor:pointer;}
+.recap-preview-wrap{overflow:hidden;border-radius:12px;border:1px solid var(--border);margin:8px 0 12px;}
+
+/* ===== Month recap (the picture itself — 1080 px wide, big type for phones) ===== */
+.rc-card{width:1320px;box-sizing:border-box;padding:52px 60px 40px;color:#f2fff8;
+  background:linear-gradient(165deg,#14302b 0%,#1d4a42 55%,#2a5d49 100%);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.rc-head{display:flex;align-items:center;gap:36px;}
+.rc-logo{width:190px;height:190px;border-radius:50%;border:8px solid #fff;object-fit:cover;flex:none;background:#fff;}
+.rc-logo-emoji{display:flex;align-items:center;justify-content:center;font-size:100px;background:#2a5d49;}
+.rc-head-txt{min-width:0;}
+.rc-clan{font-size:84px;font-weight:900;line-height:1.05;letter-spacing:.01em;}
+.rc-month{font-size:42px;font-weight:600;color:#9be7bd;margin-top:10px;}
+.rc-record{margin-top:36px;padding:28px 30px;border-radius:30px;background:rgba(255,255,255,.1);border:2px solid rgba(255,255,255,.16);text-align:center;}
+.rc-rec-big{font-size:112px;font-weight:900;line-height:1.05;letter-spacing:.02em;}
+.rc-rec-sub{font-size:42px;font-weight:600;color:#cfeedd;margin-top:12px;}
+.rc-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;margin-top:28px;}
+.rc-tile{min-width:0;padding:22px 24px;border-radius:26px;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.14);}
+.rc-tl{font-size:26px;font-weight:800;letter-spacing:.06em;color:#9be7bd;}
+.rc-tv{font-size:54px;font-weight:900;line-height:1.1;margin-top:8px;overflow-wrap:anywhere;}
+.rc-ts{font-size:28px;line-height:1.2;color:#cfeedd;margin-top:6px;overflow-wrap:anywhere;}
+.rc-section{font-size:46px;font-weight:900;margin:36px 0 16px;color:#fff;}
+.rc-award{display:flex;align-items:center;gap:30px;padding:26px 30px;border-radius:26px;margin-bottom:20px;
+  background:linear-gradient(90deg,rgba(155,231,189,.22),rgba(255,255,255,.07));border:2px solid rgba(155,231,189,.35);}
+.rc-ico{font-size:92px;line-height:1;flex:none;}
+.rc-atxt{min-width:0;}
+.rc-atitle{font-size:27px;font-weight:800;letter-spacing:.08em;color:#9be7bd;}
+.rc-awho{font-size:56px;font-weight:900;line-height:1.15;margin-top:4px;overflow-wrap:anywhere;}
+.rc-awho-sm{font-size:44px;line-height:1.2;}
+.rc-awho-xs{font-size:36px;line-height:1.25;}
+.rc-adesc{font-size:30px;color:#cfeedd;margin-top:6px;}
+.rc-foot{text-align:center;font-size:34px;font-weight:600;color:#9be7bd;margin-top:36px;}
+/* Month recap on phones: use (almost) the full screen width for the picture */
+@media (max-width:640px){
+  #recapModal{padding:8px 4px;}
+  .recap-modal .modal-head{padding:12px 12px;}
+  .recap-modal .modal-body{padding:8px 4px;}
+  .recap-modal .modal-foot{padding:12px 12px;gap:8px;align-items:center;}
+  .recap-modal .recap-month-pick,.recap-modal .recap-toggles,.recap-modal #recapMsg{margin-left:8px;margin-right:8px;}
+  .recap-preview-wrap{border-radius:8px;margin:8px 0;}
+}
