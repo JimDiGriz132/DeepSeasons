@@ -614,6 +614,7 @@ function renderCalendar(){
     grid.appendChild(el);
   }
 
+  const recTarget = window.recTargets ? window.recTargets() : () => null;
   for(let d=1; d<=daysInMonth; d++){
     const key = dateKey(calYear, calMonth, d);
     const fight = state.fights[key];
@@ -641,6 +642,14 @@ function renderCalendar(){
         opp.className = "cal-score";
         opp.textContent = fight.opponentName;
         cell.appendChild(opp);
+      }
+      const tg = !computeResult(fight) ? recTarget(fight, new Date(calYear, calMonth, d)) : null;
+      if(tg){
+        const t = document.createElement("div");
+        t.className = "cal-target";
+        t.textContent = `🎯 ${tg.approx ? "~" : ""}${anFmtN(tg.per)}+`;
+        t.title = `Aim for ${anFmtN(tg.per)}+ per player (team ≈ ${anFmtN(tg.team)}, upper range (75th percentile) of opponent scores on this set, ${tg.scn} OOS, ${tg.n} fight(s))` + (tg.dropped ? ` — ${tg.dropped} unusually low opponent score(s) ignored` : "") + (tg.approx ? " — no fights in this OOS scenario yet, using all months" : "") + (tg.weighted ? ` — weighted by opponent trophies (closest: ${tg.near})` : " — opponent trophies missing, plain average");
+        cell.appendChild(t);
       }
     }
     cell.addEventListener("click", ()=>{
@@ -2416,6 +2425,7 @@ function anCollectRaw(){
       setKey: fish.length ? map.toLowerCase() + "||" + fish.map(x => x.toLowerCase()).join("|") : "",
       setLabel: fish.join(" · "),
       trophies: parseScoreVal(f.ourTrophies),
+      oppTrophies: parseScoreVal(f.oppTrophies),
       position: parseScoreVal(f.ourPosition),
       league: f.ourLeague || "",
       playerScores: f.playerScores || {},
@@ -3147,6 +3157,7 @@ function renderAnalytics(){
 
   anOpponents(list);
   anPlayers(list);
+  if(window.recRender) window.recRender();
 }
 function renderAnalyticsIfActive(){
   const p = document.getElementById("tab-analytics");
@@ -3341,7 +3352,8 @@ const RECAP_ITEMS = [
   { k: "players", label: "Players in action" },
   { k: "rising", label: "🌟 Rising Star" },
   { k: "iron", label: "🎣 Iron Angler" },
-  { k: "fresh", label: "🐟 Fresh Fin" }
+  { k: "fresh", label: "🐟 Fresh Fin" },
+  { k: "records", label: "🏆 New set records" }
 ];
 const recapOff = new Set();
 let recapKey = "";
@@ -3495,6 +3507,7 @@ function recapBuild(key){
     const fresh = [...firstSeen.entries()].filter(([, mk]) => mk === key).map(([nm]) => nm).sort();
     if(fresh.length) out.awards.push({ k: "fresh", icon: "🐟", title: "FRESH FIN", who: recapNameList(fresh, 16), desc: "new on the scoreboard this month — welcome aboard!" });
   }
+  if(window.recNewRecords) window.recNewRecords(key).forEach(x => out.awards.push(x));
   return out;
 }
 
