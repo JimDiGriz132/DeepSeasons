@@ -648,7 +648,7 @@ function renderCalendar(){
         const t = document.createElement("div");
         t.className = "cal-target";
         t.textContent = `🎯 ${tg.approx ? "~" : ""}${anFmtN(tg.per)}+`;
-        t.title = `Aim for ${anFmtN(tg.per)}+ per player (team ≈ ${anFmtN(tg.team)}, upper range (75th percentile) of opponent scores on this set, ${tg.scn} OOS, ${tg.n} fight(s))` + (tg.dropped ? ` — ${tg.dropped} unusually low opponent score(s) ignored` : "") + (tg.approx ? " — no fights in this OOS scenario yet, using all months" : "") + (tg.weighted ? ` — weighted by opponent trophies (closest: ${tg.near})` : " — opponent trophies missing, plain average");
+        t.title = `Aim for ${anFmtN(tg.per)}+ per player (team ≈ ${anFmtN(tg.team)}, upper range (75th percentile) of opponent scores on this set, ${tg.scn === "No OOS" ? "no OOS fish" : tg.scn + " OOS"}, ${tg.n} fight(s))` + (tg.dropped ? ` — ${tg.dropped} unusually low opponent score(s) ignored` : "") + (tg.approx ? " — no fights in this OOS scenario yet, using all months" : "") + (tg.weighted ? ` — weighted by opponent trophies (closest: ${tg.near})` : " — opponent trophies missing, plain average");
         cell.appendChild(t);
       }
     }
