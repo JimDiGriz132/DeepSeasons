@@ -4,6 +4,7 @@
 // Source of truth for fish / rarity / OOS months: data.json (loaded here).
 // Scenario = number of OOS common/rare/epic fish in that month (e.g. "1C",
 // "1C + 1R"); records are only compared inside the same scenario.
+// "All clans" checkbox (#recAllClans): off (default) = only the active clan's fights, on = fights of every clan.
 // Uses globals from app.js: anCollectRaw, parseScoreVal, escapeHtml,
 // anFmtDate, anFmtN, anOpenFight, renderAnalyticsIfActive.
 // =====================================================================
@@ -39,6 +40,7 @@
     return f ? { id: f.id, name: f.name, rarity: f.rarity || "common", oos: f.oos || [] }
              : { id: "?" + norm(name), name, rarity: "common", oos: [] };
   }
+  const allClansOn = () => !!(document.getElementById("recAllClans") || {}).checked;
   const entKey = infos => infos.map(i => i.id).sort().join("|");
   const fightInfos = x => x.setLabel.split(" · ").map(info);
 
@@ -68,7 +70,7 @@
   }
 
   // entKey -> scenKey -> player -> best {score, date, key, opp}   (only fights passing keep())
-  function collect(raw, ents, keep){
+  function collect(raw, ents, keep, perClan){
     const out = new Map();
     raw.forEach(x => {
       if(!x.setKey || !keep(x)) return;
@@ -80,8 +82,9 @@
         if(s == null) return;
         const byScen = out.get(k) || out.set(k, new Map()).get(k);
         const byPl = byScen.get(sc) || byScen.set(sc, new Map()).get(sc);
-        const cur = byPl.get(name);
-        if(!cur || s > cur.score || (s === cur.score && x.date < cur.date)) byPl.set(name, { name, score: s, date: x.date, key: x.key, opp: x.opp });
+        const pk = perClan ? x.clan + "\u0000" + name : name;
+        const cur = byPl.get(pk);
+        if(!cur || s > cur.score || (s === cur.score && x.date < cur.date)) byPl.set(pk, { name, clan: x.clan, score: s, date: x.date, key: x.key, opp: x.opp });
       });
     });
     return out;
@@ -104,8 +107,9 @@
     const el = document.getElementById("anRecords");
     if(!el) return;
     if(!DATA){ el.innerHTML = `<p class="hint">${escapeHtml(LOAD_ERR || "Loading data.json…")}</p>`; return; }
-    const raw = anCollectRaw(), ents = buildEntities(raw);
-    const recs = collect(raw, ents, () => true);
+    const all = allClansOn();
+    const raw = anCollectRaw(all), ents = buildEntities(raw);
+    const recs = collect(raw, ents, () => true, all);
     const mapF = (document.getElementById("recMap") || {}).value || "";
     const unknown = new Set();
     raw.forEach(x => (x.setLabel || "").split(" · ").filter(Boolean).forEach(n => { if(!findFish(n)) unknown.add(n); }));
@@ -117,7 +121,7 @@
       rows.forEach((r, i) => {
         const t = top3(sc.get(r.key)), cls = ["gold", "silver", "bronze"];
         const cells = [0, 1, 2].map(j => t[j]
-          ? `<td class="rec-${cls[j]} clickable-cell" data-ts="${t[j].date.getTime()}" title="Open this fight${t[j].opp ? " (vs " + escapeHtml(t[j].opp) + ")" : ""}"><b>${escapeHtml(t[j].name)}</b> ${anFmtN(t[j].score)}<div class="rec-date">${anFmtDate(t[j].date)}</div></td>`
+          ? `<td class="rec-${cls[j]} clickable-cell" data-ts="${t[j].date.getTime()}" data-clan="${escapeHtml(t[j].clan || "")}" title="Open this fight${t[j].opp ? " (vs " + escapeHtml(t[j].opp) + ")" : ""}"><b>${escapeHtml(t[j].name)}</b> ${anFmtN(t[j].score)}<div class="rec-date">${anFmtDate(t[j].date)}${all && t[j].clan ? " · " + escapeHtml(t[j].clan) : ""}</div></td>`
           : `<td class="rec-${cls[j]} rec-empty"></td>`).join("");
         const months = r.n === 0 && r.months.length === 12 ? "all year" : r.months.join("/");
         html += `<tr>${i === 0 ? `<td class="left rec-set" rowspan="${rows.length}">${escapeHtml(e.label)}</td>` : ""}` +
@@ -129,10 +133,12 @@
       <tbody>${html}</tbody></table></div>` +
       (unknown.size ? `<p class="hint an-missing">Not found in data.json (treated as in-season): ${[...unknown].map(escapeHtml).join(", ")}</p>` : "") +
       `<p class="hint" style="text-align:left">C/R/E = how many common/rare/epic fish of the set are out of season in those months.</p>`;
-    el.querySelectorAll("td[data-ts]").forEach(td => td.addEventListener("click", () => anOpenFight(new Date(+td.dataset.ts))));
+    el.querySelectorAll("td[data-ts]").forEach(td => td.addEventListener("click", () => anOpenFight(new Date(+td.dataset.ts), td.dataset.clan)));
   };
   const recSel = document.getElementById("recMap");
   if(recSel) recSel.addEventListener("change", () => window.recRender());
+  const recAll = document.getElementById("recAllClans");
+  if(recAll) recAll.addEventListener("change", () => window.recRender());
 
   // ---- Calendar: target score for a planned fight ---------------------------
   // After the pre-fight data (map + 4 fish) is in, show what each player should

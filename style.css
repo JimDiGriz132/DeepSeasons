@@ -433,3 +433,4 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .rec-empty{opacity:.45;}
 .rec-date{font-size:.68rem;color:#555;}
 .cal-day .cal-target{font-size:.72rem;font-weight:700;color:#3d6fd6;}
+.rec-controls{display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap;margin-bottom:6px;}

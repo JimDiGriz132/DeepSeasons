@@ -2035,6 +2035,31 @@ function determineLeagueByTrophies(trophies) {
 // ---------------------------------------------------------
 // AI — before fight image processing
 // ---------------------------------------------------------
+// Clans that exist several times under the SAME name and differ only by logo colour.
+// The AI reads the logo colour and it is appended to the name: "NiceClan (White)".
+// To add another such clan, add a line here (lowercase name -> allowed colours).
+const AMBIGUOUS_CLANS = {
+  niceclan: ["Red", "Blue", "White"]
+};
+const baseClanName = n => String(n || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+const ambiguousColors = n => AMBIGUOUS_CLANS[baseClanName(n).toLowerCase()] || null;
+
+// Separate, focused AI call for same-name clans: only the logo colour, nothing else, so other
+// screenshots in the same upload (blue buttons, badges, other cards) can't confuse the answer.
+async function detectLogoColor(files, baseName, cols, opts){
+  const prompt = `Among the attached screenshot(s), find the clan card/popup of the clan named "${baseName}": it has a purple panel on the left with a LARGE ROUND LOGO and the clan name under it. Look ONLY at that round logo. Ignore every other image and every other blue UI element (buttons, the STATS badge, icons, backgrounds).
+
+Several different clans are called "${baseName}"; the only difference between them is the colour of the logo: ${cols.join(", ")}.
+Step 1: describe the FILL colour of the logo's central disc (the area behind the fish/emblem) in "discFill", and the colour of the outline strokes/rings/line art in "lineColor".
+Step 2: decide "color" using the DISC FILL, not the line art: "Red" only if the disc/emblem is clearly red; "Blue" only if the disc itself is filled with a clearly saturated blue; if the disc is white, off-white, light grey or pale and only the line art is blue-grey/teal, it is "White". When in doubt between Blue and White choose "White".
+If no such logo is visible in any image, return "color": "".
+
+Return EXCLUSIVELY this JSON (no markdown fences): {"logoFound": true, "discFill": "", "lineColor": "", "color": ""}`;
+  const out = parseAiJson(await callAiVision(files, prompt, Object.assign({ expectJson: true }, opts)));
+  const raw = String((out && out.color) || "").trim().toLowerCase();
+  return cols.find(c => c.toLowerCase() === raw) || "";
+}
+
 async function runBeforeOcr(files) {
   if(!files.length) return;
   const statusEl = document.getElementById("beforeOcrStatus");
@@ -2046,6 +2071,7 @@ async function runBeforeOcr(files) {
   try {
     let anyRejectedTrophies = false;
     let anyRejectedName = false;
+    let missingLogoColor = false;
     { // single AI request for ALL pre-fight images
       statusEl.textContent = `Analyzing ${files.length} image(s) in one AI request...`;
       
@@ -2141,6 +2167,28 @@ async function runBeforeOcr(files) {
           if(latin && latin.toLowerCase() !== oppName.toLowerCase()) {
             oppName = `${oppName} (${latin})`;
           }
+          // same-name clans: append the logo colour -> "NiceClan (White)"
+          const cols = ambiguousColors(oppName);
+          if(cols){
+            const base = baseClanName(oppName);
+            let col = "";
+            statusEl.textContent = `Checking the logo colour of ${base}...`;
+            try{
+              col = await detectLogoColor(files, base, cols, { signal, onStatus: (msg) => { if(sess === aiSessionId) statusEl.textContent = msg; } });
+            }catch(e){
+              if(e.name === "AbortError") throw e;
+              console.warn("logo colour check failed:", e);
+            }
+            if(sess !== aiSessionId) return;
+            if(!col){
+              // keep a colour already in the field (e.g. from an earlier screenshot of the clan card)
+              const cur = document.getElementById("opponentName").value.trim();
+              const m = /\(([^)]*)\)\s*$/.exec(cur);
+              if(m && baseClanName(cur).toLowerCase() === base.toLowerCase()) col = cols.find(c => c.toLowerCase() === m[1].trim().toLowerCase()) || "";
+            }
+            if(col) oppName = `${base} (${col})`;
+            else { oppName = base; missingLogoColor = true; }
+          }
           document.getElementById("opponentName").value = oppName;
         } else {
           rejectedName = true;
@@ -2164,6 +2212,7 @@ async function runBeforeOcr(files) {
     const warnings = [];
     if(anyRejectedTrophies) warnings.push("implausible trophies number");
     if(anyRejectedName) warnings.push("implausible club name (looked like a description/ID, not a name)");
+    if(missingLogoColor) warnings.push("logo colour of this same-name clan could not be read (add a screenshot showing the clan logo, or type e.g. \"NiceClan (White)\" manually)");
     statusEl.textContent = warnings.length
       ? `⚠️ Done, but AI returned ${warnings.join(" and ")} on at least one image — that field was left blank there, please check and enter it manually.`
       : "Done — data and leagues successfully synced!";
@@ -2403,10 +2452,17 @@ const anPct = n => (n == null || isNaN(n)) ? "—" : Math.round(n) + "%";
 const anFmtDate = d => d ? `${d.getDate()} ${anMonthsShort[d.getMonth()]} ${d.getFullYear()}` : "—";
 const anEl = id => document.getElementById(id);
 
-function anCollectRaw(){
+// allClans=true -> fights of EVERY clan in the store (each entry gets .clan); default = active clan only
+function anCollectRaw(allClans){
   const out = [];
-  const rest = new Set(state.restMonths || []);
-  Object.entries(state.fights || {}).forEach(([key, f]) => {
+  const sources = allClans
+    ? Object.keys(clanStore.clans).map(n => n === state.ourClanName
+        ? [n, state.fights || {}, state.restMonths || []]
+        : [n, clanStore.clans[n].fights || {}, clanStore.clans[n].restMonths || []])
+    : [[state.ourClanName, state.fights || {}, state.restMonths || []]];
+  sources.forEach(([clanName, fights, restList]) => {
+  const rest = new Set(restList);
+  Object.entries(fights).forEach(([key, f]) => {
     if(!f) return;
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
     if(!m) return;
@@ -2417,6 +2473,7 @@ function anCollectRaw(){
     const fish = (f.fishSet || []).map(titleCase).filter(Boolean)
       .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
     out.push({
+      clan: clanName,
       key, date, monthKey: key.slice(0, 7), isRest: rest.has(key.slice(0, 7)),
       scored, our, their,
       res: !scored ? null : our > their ? "WIN" : our < their ? "LOSS" : "DRAW",
@@ -2431,6 +2488,7 @@ function anCollectRaw(){
       playerScores: f.playerScores || {},
       playerRanks: f.playerRanks || {}
     });
+  });
   });
   out.sort((a, b) => a.date - b.date);
   return out;
@@ -2526,10 +2584,12 @@ function anTable(el, id, cols, rows, defKey, defDir, onRow){
 }
 
 // open the day editor for a fight date (used by clickable dates in Analytics)
-function anOpenFight(date){
+function anOpenFight(date, clan){
   if(!(date instanceof Date) || isNaN(date)) return;
   const y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
-  const f = state.fights[dateKey(y, m, d)];
+  const ourName = (clan && clanStore.clans[clan]) ? clan : state.ourClanName;
+  const fightsOf = ourName === state.ourClanName ? state.fights : clanStore.clans[ourName].fights;
+  const f = (fightsOf || {})[dateKey(y, m, d)];
   if(!f) return;
 
   const val = v => (v == null || String(v).trim() === "") ? "—" : escapeHtml(String(v));
@@ -2564,7 +2624,7 @@ function anOpenFight(date){
   document.getElementById("fvTitle").textContent = `${d}. ${MONTHS[m]} ${y}.`;
   document.getElementById("fvBody").innerHTML =
     `<div class="fv-result">${score}</div>
-     <div class="fv-grid">${clanBox("Our Clan", state.ourClanName, f.ourTrophies, f.ourPosition, f.ourLeague)}${clanBox("Opponent", f.opponentName, f.oppTrophies, f.oppPosition, f.oppLeague)}</div>
+     <div class="fv-grid">${clanBox("Our Clan", ourName, f.ourTrophies, f.ourPosition, f.ourLeague)}${clanBox("Opponent", f.opponentName, f.oppTrophies, f.oppPosition, f.oppLeague)}</div>
      ${mapSet}${board}`;
   document.getElementById("fightViewModal").classList.remove("hidden");
 }

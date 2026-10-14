@@ -93,8 +93,11 @@
       <p class="hint an-missing" id="anMissing"></p>
 
       <h3>Records by season (OOS)</h3>
-      <p class="hint" style="text-align:left">Top 3 personal bests per set, split by which fish are out of season (OOS) that month. All-time; ignores the filters above.</p>
-      <label class="an-h2h-pick">Map <select id="recMap"></select></label>
+      <p class="hint" style="text-align:left">Top 3 personal bests per set, split by which fish are out of season (OOS) that month. All-time; ignores the filters above. By default only the current clan; tick the box to include every clan.</p>
+      <div class="rec-controls">
+        <label class="an-h2h-pick">Map <select id="recMap"></select></label>
+        <label class="rest-toggle"><input type="checkbox" id="recAllClans"> All clans</label>
+      </div>
       <div id="anRecords"></div>
 
       <h3>Map &amp; set draw</h3>
