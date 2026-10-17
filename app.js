@@ -667,6 +667,8 @@ function computeResult(fight){
     if(o == null || t == null) return null;
     return o > t ? "WIN" : (o < t ? "LOSS" : "DRAW");
   }
+  // imported old tables can carry only a WIN/LOSS word (no scores)
+  if(fight.result === "WIN" || fight.result === "LOSS" || fight.result === "DRAW") return fight.result;
   return null;
 }
 
