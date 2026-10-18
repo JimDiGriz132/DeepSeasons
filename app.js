@@ -117,6 +117,17 @@ Object.defineProperty(state, "clanLogo", {
   },
   set(v){ if(clanStore.clans[state.ourClanName]) clanStore.clans[state.ourClanName].logo = v || ""; }
 });
+// Season-end results for the ACTIVE clan: { "2026-10-29": { place, league, trophies, img } }.
+// Not fights - they never enter the analytics, they only decorate a calendar cell.
+Object.defineProperty(state, "seasonEnds", {
+  get(){
+    const c = clanStore.clans[state.ourClanName];
+    if(!c) return {};
+    if(!c.seasonEnds || typeof c.seasonEnds !== "object" || Array.isArray(c.seasonEnds)) c.seasonEnds = {};
+    return c.seasonEnds;
+  },
+  set(v){ if(clanStore.clans[state.ourClanName]) clanStore.clans[state.ourClanName].seasonEnds = v; }
+});
 function hasLeft(name){
   const n = String(name).toLowerCase();
   return state.leftPlayers.some(x => String(x).toLowerCase() === n);
@@ -129,7 +140,7 @@ function saveData(){
   clanStore.aiKeys = state.aiKeys;
   clanStore.aiModels = state.aiModels;
   clanStore.aiFallback = state.aiFallback;
-  clanStore.clans[state.ourClanName] = { players: state.players, fights: state.fights, restMonths: state.restMonths, leftPlayers: state.leftPlayers, logo: state.clanLogo };
+  clanStore.clans[state.ourClanName] = { players: state.players, fights: state.fights, restMonths: state.restMonths, leftPlayers: state.leftPlayers, logo: state.clanLogo, seasonEnds: state.seasonEnds };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(clanStore));
 }
 
@@ -163,9 +174,10 @@ async function remoteSaveClanCol(clan, col, value, label){
 }
 function remoteSaveRestMonths(clan, v){ return remoteSaveClanCol(clan, "rest_months", v, "rest months"); }
 function remoteSaveLeftPlayers(clan, v){ return remoteSaveClanCol(clan, "left_players", v, "the left-clan list"); }
+function remoteSaveSeasonEnds(clan, v){ return remoteSaveClanCol(clan, "season_ends", v, "the season-end results"); }
 function remoteSaveLogo(clan, v){ return remoteSaveClanCol(clan, "logo", v, "the clan logo"); }
 async function remoteLoadAll(){
-  const optional = ["rest_months", "left_players", "logo"];
+  const optional = ["rest_months", "left_players", "logo", "season_ends"];
   let clansRes;
   for(let attempt = 0; attempt <= optional.length; attempt++){
     const cols = ["name", "players", ...optional.filter(c => !missingClanCols.has(c))].join(",");
@@ -184,7 +196,8 @@ async function remoteLoadAll(){
       fights: {},
       restMonths: Array.isArray(r.rest_months) ? r.rest_months : [],
       leftPlayers: Array.isArray(r.left_players) ? r.left_players : [],
-      logo: typeof r.logo === "string" ? r.logo : ""
+      logo: typeof r.logo === "string" ? r.logo : "",
+      seasonEnds: (r.season_ends && typeof r.season_ends === "object" && !Array.isArray(r.season_ends)) ? r.season_ends : {}
     };
   });
   // PostgREST returns max 1000 rows per request, so page through.
@@ -241,6 +254,9 @@ async function remoteSyncClan(clan, data, { prune = false } = {}){
   }
   if(data.logo){
     try{ await remoteSaveLogo(clan, data.logo); }catch(e){ console.warn(e); }
+  }
+  if(data.seasonEnds && Object.keys(data.seasonEnds).length){
+    try{ await remoteSaveSeasonEnds(clan, data.seasonEnds); }catch(e){ console.warn(e); }
   }
   if(Array.isArray(data.leftPlayers) && data.leftPlayers.length){
     try{ await remoteSaveLeftPlayers(clan, data.leftPlayers); }catch(e){ console.warn(e); }
@@ -303,6 +319,7 @@ async function loadFromRemote(){
       if(missingClanCols.has("rest_months") && Array.isArray(old.restMonths)) remoteClans[n].restMonths = old.restMonths;
       if(missingClanCols.has("left_players") && Array.isArray(old.leftPlayers)) remoteClans[n].leftPlayers = old.leftPlayers;
       if(missingClanCols.has("logo") && old.logo) remoteClans[n].logo = old.logo;
+      if(missingClanCols.has("season_ends") && old.seasonEnds) remoteClans[n].seasonEnds = old.seasonEnds;
     });
     clanStore.clans = remoteClans;
     const active = remoteClans[prevActive] ? prevActive : names.sort((a,b)=> a.localeCompare(b))[0];
@@ -591,6 +608,14 @@ document.getElementById("restMonthChk").addEventListener("change", (e)=>{
   if(sb) bgSync(() => remoteSaveRestMonths(state.ourClanName, state.restMonths));
 });
 
+const CAL_LEAGUES = ["bronze", "silver", "gold"];
+function num0(d){ const n = document.createElement("div"); n.className = "cal-daynum"; n.textContent = d; return n; }
+// league of OUR clan in a fight: from trophies when known (same thresholds as the OCR import), else the saved league
+function calLeagueOf(f){
+  const byT = (f.ourTrophies !== "" && f.ourTrophies != null) ? determineLeagueByTrophies(f.ourTrophies) : (f.ourLeague || "");
+  const l = String(byT).toLowerCase();
+  return CAL_LEAGUES.includes(l) ? l : "";
+}
 function renderCalendar(){
   renderRestUi();
   document.getElementById("calMonthLabel").textContent = `${MONTHS[calMonth]} ${calYear}.`;
@@ -623,6 +648,33 @@ function renderCalendar(){
     if(fight){
       const res = computeResult(fight);
       if(res) cell.classList.add(res.toLowerCase());
+      const lg = calLeagueOf(fight);
+      if(lg){
+        cell.classList.add("lg-" + lg);
+        const m = document.createElement("span");
+        m.className = "cal-league-medal";
+        m.textContent = { gold: "🥇", silver: "🥈", bronze: "🥉" }[lg];
+        m.title = lg[0].toUpperCase() + lg.slice(1) + " league";
+        cell.appendChild(m);
+      }
+    }
+    const se = state.seasonEnds[key];
+    if(se && !fight){
+      const lg = String(se.league || "").toLowerCase();
+      cell.classList.add("season-end");
+      if(CAL_LEAGUES.includes(lg)) cell.classList.add("lg-" + lg);
+      const medal = { gold: "🥇", silver: "🥈", bronze: "🥉" }[lg] || "🏁";
+      const b = document.createElement("div");
+      b.className = "cal-season";
+      b.innerHTML = `<span class="cal-medal">${medal}</span> ${se.place ? "#" + escapeHtml(String(se.place).replace(/^#/, "")) : ""}`;
+      b.title = `Season end: ${se.league || "?"}${se.place ? ", place #" + String(se.place).replace(/^#/, "") : ""}${se.trophies ? ", " + se.trophies + " trophies" : ""} (click to open)`;
+      const lbl = document.createElement("div");
+      lbl.className = "cal-season-lbl";
+      lbl.textContent = se.league || "Season end";
+      cell.appendChild(num0(d)); cell.appendChild(b); cell.appendChild(lbl);
+      cell.addEventListener("click", () => openSeasonEnd(calYear, calMonth, d));
+      grid.appendChild(cell);
+      continue;
     }
     const num = document.createElement("div");
     num.className = "cal-daynum";
@@ -671,6 +723,139 @@ function computeResult(fight){
   if(fight.result === "WIN" || fight.result === "LOSS" || fight.result === "DRAW") return fight.result;
   return null;
 }
+
+
+// ---------------------------------------------------------
+// SEASON END (final standing of the season, NOT a fight)
+// ---------------------------------------------------------
+let seasonKey = null, seasonBlob = null, seasonPreviewUrl = "", seasonReadId = 0;
+// The screenshot is NOT saved anywhere: it is only shown here and read by the AI
+// (final place + trophies). Everything can also be typed in by hand.
+function seasonSetPreview(blob){
+  if(seasonPreviewUrl){ URL.revokeObjectURL(seasonPreviewUrl); seasonPreviewUrl = ""; }
+  seasonBlob = blob || null;
+  const prev = document.getElementById("seasonImgPreview");
+  if(blob){ seasonPreviewUrl = URL.createObjectURL(blob); prev.innerHTML = `<img src="${seasonPreviewUrl}" alt="season end screenshot">`; }
+  else prev.innerHTML = '<span class="hint">Drop, paste (Ctrl+V) or upload the end-of-season clan card — the AI reads place &amp; trophies (or type them in)</span>';
+}
+async function seasonReadWithAi(blob){
+  const st = document.getElementById("seasonStatus");
+  const my = ++seasonReadId;
+  st.textContent = "Reading the screenshot…";
+  try{
+    const prompt = `This is a screenshot of a clan info card from the mobile game Creatures of the Deep (purple panel on the left with the clan logo, white panel on the right).
+At the top of the white panel there are three columns:
+ - LEFT: a "#N" rank above a LILAC/PURPLE badge with a trophy-cup icon and a number (the clan's league trophies, always below 1000),
+ - MIDDLE: "Win Ratio" with a percentage,
+ - RIGHT: another "#M" above a PINK badge with a "P" icon and a big number (points) - IGNORE this column completely.
+Return EXCLUSIVELY this JSON (no markdown fences): {"place": <the number after # directly above the lilac trophy badge, digits only>, "trophies": <the number inside the lilac trophy badge, digits only>}. Use null for anything not visible. Never invent numbers.`;
+    const out = parseAiJson(await callAiVision(blob, prompt, { expectJson: true, onStatus: t => { if(my === seasonReadId) st.textContent = t; } }));
+    if(my !== seasonReadId) return;
+    const num = v => { const n = Number(String(v == null ? "" : v).replace(/[^\d]/g, "")); return String(v == null ? "" : v).trim() === "" || isNaN(n) ? null : n; };
+    const place = num(out && out.place), tr = num(out && out.trophies);
+    if(place != null) document.getElementById("seasonPlace").value = place;
+    if(tr != null && tr <= 999){
+      document.getElementById("seasonTrophies").value = tr;
+      document.getElementById("seasonLeague").value = determineLeagueByTrophies(tr);
+    }
+    st.textContent = (place != null && tr != null && tr <= 999)
+      ? `Read: #${place}, ${tr} trophies → ${determineLeagueByTrophies(tr)} league. Check and press Save.`
+      : "⚠️ Couldn't read everything reliably — please fill in the empty fields by hand.";
+  }catch(e){
+    if(my === seasonReadId) st.textContent = "⚠️ AI read failed (" + (e.message || e) + ") — type the values in by hand.";
+  }
+}
+async function seasonLoadFile(file){
+  if(!file || !/^image\//.test(file.type)) return;
+  seasonSetPreview(file);
+  seasonReadWithAi(file);
+}
+async function seasonLoadUrl(u){
+  u = String(u || "").trim();
+  if(!/^https?:\/\//i.test(u)) return;
+  const st = document.getElementById("seasonStatus");
+  try{ await seasonLoadFile(await (await fetch(u)).blob()); }
+  catch(e){ st.textContent = "⚠️ The browser can't open that link (Discord blocks it) - save the image and upload / paste / drag it here instead."; }
+}
+function openSeasonEnd(y, m, d){
+  seasonKey = dateKey(y, m, d);
+  const se = state.seasonEnds[seasonKey] || {};
+  document.getElementById("seasonDateLabel").textContent = `🏁 Season end — ${d}. ${MONTHS[m]} ${y}.`;
+  document.getElementById("seasonPlace").value = se.place || "";
+  document.getElementById("seasonTrophies").value = se.trophies || "";
+  document.getElementById("seasonLeague").value = se.league || "Gold";
+  document.getElementById("seasonImgUrl").value = "";
+  document.getElementById("seasonStatus").textContent = "";
+  seasonReadId++; seasonSetPreview(null);
+  const ro = !isAdmin;
+  document.querySelectorAll("#seasonModal input, #seasonModal select, #seasonModal button.act").forEach(el => el.disabled = ro);
+  document.getElementById("seasonDeleteBtn").classList.toggle("hidden", !state.seasonEnds[seasonKey]);
+  document.getElementById("seasonModal").classList.remove("hidden");
+}
+function closeSeasonEnd(){ document.getElementById("seasonModal").classList.add("hidden"); }
+document.getElementById("seasonClose").addEventListener("click", closeSeasonEnd);
+document.getElementById("seasonFile").addEventListener("change", e => { seasonLoadFile(e.target.files[0]); e.target.value = ""; });
+document.getElementById("seasonImgUrl").addEventListener("change", e => seasonLoadUrl(e.target.value));
+document.getElementById("seasonImgClear").addEventListener("click", () => { seasonReadId++; seasonSetPreview(null); document.getElementById("seasonStatus").textContent = ""; });
+// league follows trophies automatically (still editable afterwards)
+document.getElementById("seasonTrophies").addEventListener("input", e => {
+  if(e.target.value !== "") document.getElementById("seasonLeague").value = determineLeagueByTrophies(e.target.value);
+});
+(function(){
+  const box = document.getElementById("seasonModal");
+  box.addEventListener("dragover", e => { e.preventDefault(); });
+  box.addEventListener("drop", e => {
+    e.preventDefault();
+    if(!isAdmin) return;
+    const f = e.dataTransfer.files && e.dataTransfer.files[0];
+    if(f) return seasonLoadFile(f);
+    const u = e.dataTransfer.getData("text/uri-list") || e.dataTransfer.getData("text/plain");
+    if(u) seasonLoadUrl(u.split("\n")[0]);
+  });
+  document.addEventListener("paste", e => {
+    if(box.classList.contains("hidden") || !isAdmin) return;
+    const items = [...(e.clipboardData && e.clipboardData.items || [])];
+    const it = items.find(i => i.type.startsWith("image/"));
+    if(it){ seasonLoadFile(it.getAsFile()); e.preventDefault(); return; }
+    const t = e.clipboardData && e.clipboardData.getData("text");
+    if(t && /^https?:\/\//i.test(t.trim()) && document.activeElement.tagName !== "INPUT"){ seasonLoadUrl(t); e.preventDefault(); }
+  });
+})();
+async function seasonPersist(next){
+  const clan = state.ourClanName;
+  if(sb){
+    try{ await remoteSaveSeasonEnds(clan, next); }
+    catch(err){ alert("Couldn't save to the database: " + (err.message || err)); return false; }
+  }
+  if(clan !== state.ourClanName) return true;
+  state.seasonEnds = next;
+  saveData();
+  return true;
+}
+document.getElementById("seasonSaveBtn").addEventListener("click", async () => {
+  if(!isAdmin || !seasonKey) return;
+  const next = Object.assign({}, state.seasonEnds);
+  next[seasonKey] = {
+    place: document.getElementById("seasonPlace").value.trim().replace(/^#/, ""),
+    league: document.getElementById("seasonLeague").value,
+    trophies: document.getElementById("seasonTrophies").value.trim()
+  };
+  if(!(await seasonPersist(next))) return;
+  closeSeasonEnd(); renderCalendar();
+});
+document.getElementById("seasonDeleteBtn").addEventListener("click", async () => {
+  if(!isAdmin || !seasonKey || !confirm("Remove the season-end mark from this day?")) return;
+  const next = Object.assign({}, state.seasonEnds); delete next[seasonKey];
+  if(!(await seasonPersist(next))) return;
+  closeSeasonEnd(); renderCalendar();
+});
+// switch inside the normal day editor: "this day is the season end, not a fight"
+document.getElementById("seasonSwitchBtn").addEventListener("click", () => {
+  if(!isAdmin) return;
+  const [y, m, d] = editorKey.split("-").map(Number);
+  closeEditorModal();
+  openSeasonEnd(y, m - 1, d);
+});
 
 // ---------------------------------------------------------
 // TABLE VIEW
@@ -955,7 +1140,8 @@ document.getElementById("importFile").addEventListener("change", (e)=>{
               fights: Object.assign({}, cur ? cur.fights : {}, c.fights || {}),
               restMonths: [...new Set([...(cur && cur.restMonths || []), ...(c.restMonths || [])])].sort(),
               leftPlayers: [...new Set([...(cur && cur.leftPlayers || []), ...(c.leftPlayers || [])])],
-              logo: (c && c.logo) || (cur && cur.logo) || ""
+              logo: (c && c.logo) || (cur && cur.logo) || "",
+              seasonEnds: Object.assign({}, cur && cur.seasonEnds || {}, c && c.seasonEnds || {})
             };
             await remoteSyncClan(name, data);
           }
@@ -2691,6 +2877,19 @@ function anFiltered(){
 
   const list = scoredPeriod.filter(x => (!mapF || x.map === mapF) && (!setF || x.setKey === setF));
   const growth = inPeriod.filter(x => x.trophies != null || x.position != null);
+  // Season-end standings (final place + trophies after the last fight) are real data points
+  // for the trophy / position charts, but NOT fights: they are added here only.
+  Object.entries(state.seasonEnds || {}).forEach(([key, se]) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key);
+    if(!m || !se) return;
+    const date = new Date(+m[1], +m[2] - 1, +m[3]);
+    if(from && date < from) return;
+    if(!includeRest && (state.restMonths || []).includes(key.slice(0, 7))) return;
+    const trophies = parseScoreVal(se.trophies), position = parseScoreVal(se.place);
+    if(trophies == null && position == null) return;
+    growth.push({ date, key, monthKey: key.slice(0, 7), trophies, position, league: se.league || "", seasonEnd: true });
+  });
+  growth.sort((a, b) => a.date - b.date || (a.seasonEnd ? 1 : 0) - (b.seasonEnd ? 1 : 0));
   const draws = inPeriod.filter(x => x.map);
   return { list, growth, draws, scoredTotal: base.filter(x => x.scored).length, restExcluded };
 }
@@ -2896,7 +3095,8 @@ function anGrowth(growth){
     lines: [longDate(x.date),
       x.trophies != null ? `Trophies: ${x.trophies}` : null,
       x.position != null ? `Position: #${x.position}` : null,
-      x.league ? `League: ${x.league}` : null].filter(Boolean)
+      x.league ? `League: ${x.league}` : null,
+      x.seasonEnd ? "🏁 Season end (final standing)" : null].filter(Boolean)
   });
   const tro = growth.filter(x => x.trophies != null).map(x => Object.assign(mk(x), { y: x.trophies }));
   const lgIdx = l => AN_LEAGUES.findIndex(x => x.toLowerCase() === String(l || "").toLowerCase());

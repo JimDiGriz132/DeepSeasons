@@ -37,7 +37,7 @@
       <span id="restBadge" class="rest-badge hidden">😴 Rest month</span>
     </div>
     <div class="calendar-grid" id="calendarGrid"></div>
-    <p class="hint">Click on a day to enter/edit data for that fight. Green = WIN, orange = LOSS, gray = DRAW, white= INCOMPLETE/ NO ENTRY.</p>
+    <p class="hint">Click on a day to enter/edit data for that fight. Green = WIN, orange = LOSS, gray = DRAW, white= INCOMPLETE/ NO ENTRY. Border: 🥉 bronze, 🥈 silver, 🥇 gold league.</p>
   </section>
 
   <!-- ===================== TABLE TAB ===================== -->
@@ -201,6 +201,10 @@
     </div>
 
     <div class="modal-body">
+
+      <div class="season-switch-row admin-only">
+        <button id="seasonSwitchBtn" type="button" class="season-switch">🏁 This day is the SEASON END →</button>
+      </div>
 
       <!-- BEFORE FIGHT -->
       <fieldset class="block">
@@ -403,6 +407,38 @@
     <div class="modal-foot">
       <span class="hint-inline">Untick anything you don't want on the picture.</span>
       <button id="recapDownload" class="primary" type="button">⬇ Download PNG</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== SEASON END MODAL ===================== -->
+<div id="seasonModal" class="modal-backdrop hidden">
+  <div class="modal small season-modal">
+    <div class="modal-head">
+      <h2 id="seasonDateLabel">🏁 Season end</h2>
+      <button id="seasonClose" class="close-btn" type="button">✕</button>
+    </div>
+    <div class="modal-body season-body">
+      <div class="season-grid">
+        <label>Final place <input type="text" id="seasonPlace" inputmode="numeric" placeholder="e.g. 7"></label>
+        <label>Trophies <input type="text" id="seasonTrophies" inputmode="numeric" placeholder="e.g. 202"></label>
+        <label>League
+          <select id="seasonLeague">
+            <option>Warm-up</option><option>Novice</option><option>Bronze</option><option>Silver</option><option>Gold</option>
+          </select>
+        </label>
+      </div>
+      <div id="seasonImgPreview" class="season-img-preview"></div>
+      <div class="season-img-actions admin-only">
+        <label class="upload-btn act">📷 Upload screenshot<input type="file" id="seasonFile" accept="image/*" hidden></label>
+        <input type="text" id="seasonImgUrl" placeholder="or image link + Enter">
+        <button id="seasonImgClear" type="button" class="act">✕</button>
+      </div>
+      <div id="seasonStatus" class="hint"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="seasonDeleteBtn" class="danger admin-only hidden" type="button">Remove</button>
+      <button id="seasonSaveBtn" class="primary admin-only" type="button">Save</button>
     </div>
   </div>
 </div>

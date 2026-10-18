@@ -451,3 +451,32 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .ti-new{color:#1e8449;font-weight:600;}
 .ti-diff{color:#b9770e;font-weight:600;}
 .ti-warn{color:#b9770e;font-size:.76rem;}
+/* ---- league ring on calendar cells (inset shadow = thick ring without changing the layout) ---- */
+.cal-day{position:relative;}
+.cal-day.lg-bronze{border-color:#a85f24;box-shadow:inset 0 0 0 4px #a85f24;}
+.cal-day.lg-silver{border-color:#8e9aa8;box-shadow:inset 0 0 0 4px #8e9aa8;}
+.cal-day.lg-gold{border-color:#f2b600;box-shadow:inset 0 0 0 4px #f2b600;}
+.cal-day.lg-bronze:hover{box-shadow:inset 0 0 0 4px #a85f24,0 4px 10px rgba(0,0,0,.12);}
+.cal-day.lg-silver:hover{box-shadow:inset 0 0 0 4px #8e9aa8,0 4px 10px rgba(0,0,0,.12);}
+.cal-day.lg-gold:hover{box-shadow:inset 0 0 0 4px #f2b600,0 4px 10px rgba(0,0,0,.12);}
+.cal-day.lg-bronze,.cal-day.lg-silver,.cal-day.lg-gold{padding:9px 11px;}
+.cal-league-medal{position:absolute;top:5px;right:8px;font-size:1rem;line-height:1;}
+.cal-day.season-end{align-items:center;text-align:center;}
+.cal-day.season-end.lg-gold{background:#fff3c4;}
+.cal-day.season-end.lg-silver{background:#e9edf2;}
+.cal-day.season-end.lg-bronze{background:#f6e2cf;}
+.cal-day.season-end .cal-daynum{align-self:flex-start;}
+.cal-season{font-weight:800;font-size:1rem;}
+.cal-medal{font-size:1.3rem;}
+.cal-season-lbl{font-size:.7rem;color:#555;font-weight:700;text-transform:uppercase;letter-spacing:.03em;}
+.season-switch-row{margin:0 0 10px;}
+.season-switch{background:#fff6d6;border:1px dashed #d4a514;border-radius:8px;padding:6px 10px;cursor:pointer;font-weight:700;}
+.modal.season-modal{max-width:500px;}
+.season-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:12px;}
+.season-grid label{display:flex;flex-direction:column;font-size:.8rem;font-weight:700;gap:4px;min-width:0;}
+.season-grid input,.season-grid select{width:100%;box-sizing:border-box;min-width:0;height:34px;padding:4px 8px;}
+.season-img-preview{min-height:110px;border:2px dashed var(--border);border-radius:10px;display:flex;align-items:center;justify-content:center;padding:8px;text-align:center;}
+.season-img-preview img{max-width:100%;max-height:200px;border-radius:8px;}
+.season-img-actions{display:flex;gap:6px;margin-top:8px;align-items:center;}
+.season-img-actions input[type=text]{flex:1;min-width:0;box-sizing:border-box;height:34px;}
+.season-img-actions .upload-btn{white-space:nowrap;flex:none;}
