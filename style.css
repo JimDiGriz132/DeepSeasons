@@ -453,17 +453,23 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .ti-warn{color:#b9770e;font-size:.76rem;}
 /* ---- league ring on calendar cells (inset shadow = thick ring without changing the layout) ---- */
 .cal-day{position:relative;}
+.cal-day.lg-warmup{border-color:#8a8f98;box-shadow:inset 0 0 0 4px #8a8f98;}
+.cal-day.lg-warmup:hover{box-shadow:inset 0 0 0 4px #8a8f98,0 4px 10px rgba(0,0,0,.12);}
+.cal-day.lg-novice{border-color:#4f9d8f;box-shadow:inset 0 0 0 4px #4f9d8f;}
+.cal-day.lg-novice:hover{box-shadow:inset 0 0 0 4px #4f9d8f,0 4px 10px rgba(0,0,0,.12);}
 .cal-day.lg-bronze{border-color:#a85f24;box-shadow:inset 0 0 0 4px #a85f24;}
 .cal-day.lg-silver{border-color:#8e9aa8;box-shadow:inset 0 0 0 4px #8e9aa8;}
 .cal-day.lg-gold{border-color:#f2b600;box-shadow:inset 0 0 0 4px #f2b600;}
 .cal-day.lg-bronze:hover{box-shadow:inset 0 0 0 4px #a85f24,0 4px 10px rgba(0,0,0,.12);}
 .cal-day.lg-silver:hover{box-shadow:inset 0 0 0 4px #8e9aa8,0 4px 10px rgba(0,0,0,.12);}
 .cal-day.lg-gold:hover{box-shadow:inset 0 0 0 4px #f2b600,0 4px 10px rgba(0,0,0,.12);}
-.cal-day.lg-bronze,.cal-day.lg-silver,.cal-day.lg-gold{padding:9px 11px;}
+.cal-day.lg-warmup,.cal-day.lg-novice,.cal-day.lg-bronze,.cal-day.lg-silver,.cal-day.lg-gold{padding:9px 11px;}
 .cal-league-medal{position:absolute;top:5px;right:8px;font-size:1rem;line-height:1;}
 .cal-day.season-end{align-items:center;text-align:center;}
 .cal-day.season-end.lg-gold{background:#fff3c4;}
 .cal-day.season-end.lg-silver{background:#e9edf2;}
+.cal-day.season-end.lg-warmup{background:#eceef0;}
+.cal-day.season-end.lg-novice{background:#dcefeb;}
 .cal-day.season-end.lg-bronze{background:#f6e2cf;}
 .cal-day.season-end .cal-daynum{align-self:flex-start;}
 .cal-season{font-weight:800;font-size:1rem;}
@@ -480,3 +486,7 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .season-img-actions{display:flex;gap:6px;margin-top:8px;align-items:center;}
 .season-img-actions input[type=text]{flex:1;min-width:0;box-sizing:border-box;height:34px;}
 .season-img-actions .upload-btn{white-space:nowrap;flex:none;}
+/* novice medal: recolor the yellow 🏅 emoji to teal so it differs from gold */
+.m-novice{filter:hue-rotate(130deg) saturate(1.4);}
+.m-warmup{color:#8a8f98;}
+.cal-league-medal.inferred{opacity:.55;}

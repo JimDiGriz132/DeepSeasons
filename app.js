@@ -608,13 +608,53 @@ document.getElementById("restMonthChk").addEventListener("change", (e)=>{
   if(sb) bgSync(() => remoteSaveRestMonths(state.ourClanName, state.restMonths));
 });
 
-const CAL_LEAGUES = ["bronze", "silver", "gold"];
+const CAL_LEAGUES = ["warmup", "novice", "bronze", "silver", "gold"];
+// warm-up has no ribbon medal: a plain grey dot (coloured in CSS)
+const CAL_MEDALS = { warmup: "●", novice: "🏅", bronze: "🥉", silver: "🥈", gold: "🥇" };
+const CAL_NAMES = { warmup: "Warm-up", novice: "Novice", bronze: "Bronze", silver: "Silver", gold: "Gold" };
+const calNormLeague = v => String(v || "").toLowerCase().replace(/[^a-z]/g, "");
 function num0(d){ const n = document.createElement("div"); n.className = "cal-daynum"; n.textContent = d; return n; }
-// league of OUR clan in a fight: from trophies when known (same thresholds as the OCR import), else the saved league
-function calLeagueOf(f){
-  const byT = (f.ourTrophies !== "" && f.ourTrophies != null) ? determineLeagueByTrophies(f.ourTrophies) : (f.ourLeague || "");
-  const l = String(byT).toLowerCase();
-  return CAL_LEAGUES.includes(l) ? l : "";
+// league explicitly known for a fight: the SAVED league wins (it is what you see/edit in the fight form);
+// "Warm-up"/empty is just the form default, so only then fall back to the trophy thresholds
+function calKnownLeague(f){
+  let l = calNormLeague(f.ourLeague);
+  if(l && l !== "warmup" && CAL_LEAGUES.includes(l)) return l;
+  // "Warm-up" counts when it was picked by hand (ourLeagueSet); otherwise it is only the form default -> unknown
+  if(l === "warmup" && f.ourLeagueSet) return l;
+  if(f.ourTrophies !== "" && f.ourTrophies != null){
+    l = calNormLeague(determineLeagueByTrophies(f.ourTrophies));
+    if(CAL_LEAGUES.includes(l)) return l;
+  }
+  return "";
+}
+// league for a calendar day: known league of that fight, otherwise inferred from the same season
+// (league of the next season-end result, else the nearest fight with a known league)
+let calLeagueSrc = "";   // where the last calLeagueOf() answer came from (shown in the medal tooltip)
+function calLeagueOf(f, key){
+  const own = calKnownLeague(f);
+  if(own){
+    const saved = calNormLeague(f.ourLeague);
+    calLeagueSrc = (saved && (saved !== "warmup" || f.ourLeagueSet) && CAL_LEAGUES.includes(saved)) ? `saved league "${f.ourLeague}"` : `trophies ${f.ourTrophies}`;
+    return own;
+  }
+  calLeagueSrc = "";
+  if(!key) return own;
+  const dayMs = k => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(k); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5 : null; };
+  const t = dayMs(key); if(t == null) return "";
+  const ends = Object.keys(state.seasonEnds || {}).filter(k => dayMs(k) != null).sort();
+  const next = ends.find(k => k >= key);
+  if(next && dayMs(next) - t <= 40){
+    const l = calNormLeague((state.seasonEnds[next] || {}).league);
+    if(CAL_LEAGUES.includes(l)){ calLeagueSrc = `INFERRED from season end ${next}`; return l; }
+  }
+  let best = "", bestK = "", bd = 21;
+  Object.entries(state.fights || {}).forEach(([k, g]) => {
+    const d = dayMs(k); if(d == null || k === key || !g) return;
+    const l = calKnownLeague(g);
+    if(l && Math.abs(d - t) < bd){ bd = Math.abs(d - t); best = l; bestK = k; }
+  });
+  if(best) calLeagueSrc = `INFERRED from fight ${bestK}`;
+  return best;
 }
 function renderCalendar(){
   renderRestUi();
@@ -648,25 +688,25 @@ function renderCalendar(){
     if(fight){
       const res = computeResult(fight);
       if(res) cell.classList.add(res.toLowerCase());
-      const lg = calLeagueOf(fight);
+      const lg = calLeagueOf(fight, key);
       if(lg){
         cell.classList.add("lg-" + lg);
         const m = document.createElement("span");
-        m.className = "cal-league-medal";
-        m.textContent = { gold: "🥇", silver: "🥈", bronze: "🥉" }[lg];
-        m.title = lg[0].toUpperCase() + lg.slice(1) + " league";
+        m.className = "cal-league-medal m-" + lg + (/^INFERRED/.test(calLeagueSrc) ? " inferred" : "");
+        m.textContent = CAL_MEDALS[lg];
+        m.title = CAL_NAMES[lg] + " league (" + calLeagueSrc + ")";
         cell.appendChild(m);
       }
     }
     const se = state.seasonEnds[key];
     if(se && !fight){
-      const lg = String(se.league || "").toLowerCase();
+      const lg = calNormLeague(se.league);
       cell.classList.add("season-end");
       if(CAL_LEAGUES.includes(lg)) cell.classList.add("lg-" + lg);
-      const medal = { gold: "🥇", silver: "🥈", bronze: "🥉" }[lg] || "🏁";
+      const medal = CAL_MEDALS[lg] || "🏁";
       const b = document.createElement("div");
       b.className = "cal-season";
-      b.innerHTML = `<span class="cal-medal">${medal}</span> ${se.place ? "#" + escapeHtml(String(se.place).replace(/^#/, "")) : ""}`;
+      b.innerHTML = `<span class="cal-medal m-${lg}">${medal}</span> ${se.place ? "#" + escapeHtml(String(se.place).replace(/^#/, "")) : ""}`;
       b.title = `Season end: ${se.league || "?"}${se.place ? ", place #" + String(se.place).replace(/^#/, "") : ""}${se.trophies ? ", " + se.trophies + " trophies" : ""} (click to open)`;
       const lbl = document.createElement("div");
       lbl.className = "cal-season-lbl";
@@ -1581,6 +1621,7 @@ function openEditor(y, m, d){
   document.getElementById("ourTrophies").value = editorFight.ourTrophies || "";
   document.getElementById("ourPosition").value = editorFight.ourPosition || "";
   document.getElementById("ourLeague").value = editorFight.ourLeague || "Warm-up";
+  ourLeagueTouched = false;
   document.getElementById("opponentName").value = editorFight.opponentName || "";
   document.getElementById("oppTrophies").value = editorFight.oppTrophies || "";
   document.getElementById("oppPosition").value = editorFight.oppPosition || "";
@@ -1719,6 +1760,10 @@ function updateScoreCheck(){
   el.className = cls;
 }
 
+// the league <select> defaults to "Warm-up", so a saved "Warm-up" alone is ambiguous (chosen vs. just the default).
+// Picking a league by hand marks it as deliberate (ourLeagueSet) -> the calendar then trusts it.
+let ourLeagueTouched = false;
+document.getElementById("ourLeague").addEventListener("change", () => { ourLeagueTouched = true; });
 document.getElementById("saveFightBtn").addEventListener("click", async ()=>{
   if(!isAdmin) return;
   const btn = document.getElementById("saveFightBtn");
@@ -1729,6 +1774,7 @@ document.getElementById("saveFightBtn").addEventListener("click", async ()=>{
     ourTrophies: document.getElementById("ourTrophies").value,
     ourPosition: document.getElementById("ourPosition").value,
     ourLeague: document.getElementById("ourLeague").value,
+    ourLeagueSet: !!(ourLeagueTouched || (editorFight && editorFight.ourLeagueSet)),
     oppTrophies: document.getElementById("oppTrophies").value,
     oppPosition: document.getElementById("oppPosition").value,
     oppLeague: document.getElementById("oppLeague").value,
@@ -2227,10 +2273,18 @@ function determineLeagueByTrophies(trophies) {
 // The AI reads the logo colour and it is appended to the name: "NiceClan (White)".
 // To add another such clan, add a line here (lowercase name -> allowed colours).
 const AMBIGUOUS_CLANS = {
-  niceclan: ["Red", "Blue", "White"]
+  niceclan: ["Red", "Blue", "White"],
+  espana: ["White", "Gold"]   // "España" (accent/ñ ignored when matching); more colours: just add them here
+};
+// optional per-clan hint for the colour decision (otherwise the generic one below is used)
+const AMBIGUOUS_HINTS = {
+  niceclan: `Step 2: decide "color" using the DISC FILL, not the line art: "Red" only if the disc/emblem is clearly red; "Blue" only if the disc itself is filled with a clearly saturated blue; if the disc is white, off-white, light grey or pale and only the line art is blue-grey/teal, it is "White". When in doubt between Blue and White choose "White".`,
+  espana: `Step 2: decide "color" using the DISC FILL and the emblem: "Gold" only if the disc/emblem is clearly gold / yellow / metallic orange; if the disc is white, off-white, light grey or pale (even with coloured line art or a red/yellow detail), it is "White". When in doubt choose "White".`
 };
 const baseClanName = n => String(n || "").replace(/\s*\([^)]*\)\s*$/, "").trim();
-const ambiguousColors = n => AMBIGUOUS_CLANS[baseClanName(n).toLowerCase()] || null;
+// accent-insensitive key: "España" / "Espana" / "ESPAÑA" -> "espana"
+const clanKey = n => baseClanName(n).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+const ambiguousColors = n => AMBIGUOUS_CLANS[clanKey(n)] || null;
 
 // Separate, focused AI call for same-name clans: only the logo colour, nothing else, so other
 // screenshots in the same upload (blue buttons, badges, other cards) can't confuse the answer.
@@ -2239,7 +2293,7 @@ async function detectLogoColor(files, baseName, cols, opts){
 
 Several different clans are called "${baseName}"; the only difference between them is the colour of the logo: ${cols.join(", ")}.
 Step 1: describe the FILL colour of the logo's central disc (the area behind the fish/emblem) in "discFill", and the colour of the outline strokes/rings/line art in "lineColor".
-Step 2: decide "color" using the DISC FILL, not the line art: "Red" only if the disc/emblem is clearly red; "Blue" only if the disc itself is filled with a clearly saturated blue; if the disc is white, off-white, light grey or pale and only the line art is blue-grey/teal, it is "White". When in doubt between Blue and White choose "White".
+${AMBIGUOUS_HINTS[clanKey(baseName)] || `Step 2: decide "color" using the DISC FILL, not the line art. Pick the allowed colour that best matches the disc fill.`}
 If no such logo is visible in any image, return "color": "".
 
 Return EXCLUSIVELY this JSON (no markdown fences): {"logoFound": true, "discFill": "", "lineColor": "", "color": ""}`;
@@ -2276,10 +2330,12 @@ async function runBeforeOcr(files) {
 
       For "opponentName", use ONLY the clan's actual short name/title printed right next to its logo (usually just a few characters/words, e.g. "Turtle Town", "猪猪熊"). NEVER use a long description/bio/slogan/rules text box, and NEVER include any numeric IDs, member counts, or "group:"-style numbers you see elsewhere on the card — those are not the name.
 
-      Trophies: use ONLY the number next to a PURPLE/LILAC trophy-cup icon. Ignore any number next to a PINK/MAGENTA diamond/gem icon — that's a different currency, not trophies. Sanity check: trophies here never reach 4 digits (max ~a few hundred); if your number is 1000+, you picked the wrong one — find the smaller purple-icon number instead.
+      Trophies: use ONLY the number next to a PURPLE/LILAC trophy-cup icon. Ignore any number next to a PINK/MAGENTA diamond/gem icon — that's a different currency, not trophies. POSITION vs TROPHIES: the position is ALWAYS written with a "#" prefix (e.g. "#51"); the trophy count has NO "#" and sits right next to the cup icon. Never swap them, even if the trophy number is larger than the position. Sanity check: trophies here never reach 4 digits (max ~a few hundred); if your number is 1000+, you picked the wrong one — find the smaller purple-icon number instead.
+      Position vs trophies — do NOT swap them: the POSITION is the rank printed with a leading \"#\" (e.g. \"#117\") and has NO cup icon; the TROPHIES are the plain number (no \"#\") next to the purple cup icon. A clan with ~100 trophies in Silver league usually ranks around #30–#150, so the \"#\" number is not automatically the larger one — decide by the \"#\" sign and the cup icon, never by which number is bigger.
 
       Return EXCLUSIVELY this JSON (no markdown fences), with real values from the image(s):
       {
+        "ourLeagueName": "Silver",
         "ourTrophies": 137,
         "ourPosition": 6,
         "opponentName": "example clan name",
@@ -2290,7 +2346,7 @@ async function runBeforeOcr(files) {
         "fishSet": []
       }
       "opponentNameLatin": only if "opponentName" has Japanese/Korean/Chinese/other non-Latin script — give a romanization or short translation; otherwise leave "".
-      Leave a field empty/null only if genuinely not visible. Don't invent leagues.`;
+      Leave a field empty/null only if genuinely not visible. "ourLeagueName": the league name printed in OUR status header (Warm-up, Novice, Bronze, Silver or Gold), or "" if not visible.`;
       
       const jsonStr = await callAiVision(files, prompt, {
         signal,
@@ -2299,6 +2355,16 @@ async function runBeforeOcr(files) {
       });
       if(sess !== aiSessionId) return; // day was closed/switched meanwhile
       const parsed = parseAiJson(jsonStr);
+      // Cross-check with the league NAME printed in the header: if the trophies don't match it but the
+      // position does, the AI swapped trophies and position -> swap them back.
+      {
+        const shown = String(parsed.ourLeagueName || "").toLowerCase().replace(/[^a-z-]/g, "");
+        const tr = parsed.ourTrophies, ps = parsed.ourPosition;
+        if(["warm-up","novice","bronze","silver","gold"].includes(shown) && tr != null && tr !== "" && ps != null && ps !== ""){
+          const lg = v => String(determineLeagueByTrophies(v)).toLowerCase();
+          if(lg(tr) !== shown && lg(ps) === shown){ parsed.ourTrophies = ps; parsed.ourPosition = tr; }
+        }
+      }
 
       // Map & fish set. If this image is a map/set popup, apply ONLY that and
       // skip the standings fields: the blurred background of that popup shows
@@ -2340,7 +2406,10 @@ async function runBeforeOcr(files) {
       if(parsed.ourTrophies != null && parsed.ourTrophies !== "") {
         if(isPlausibleTrophies(parsed.ourTrophies)) {
           document.getElementById("ourTrophies").value = parsed.ourTrophies;
-          document.getElementById("ourLeague").value = determineLeagueByTrophies(parsed.ourTrophies);
+          {
+            const nm = String(parsed.ourLeagueName || "").trim().toLowerCase(), opt = [...document.getElementById("ourLeague").options].find(o => o.value.toLowerCase() === nm);
+            document.getElementById("ourLeague").value = opt ? opt.value : determineLeagueByTrophies(parsed.ourTrophies);
+          }
         } else {
           rejectedTrophies = true;
         }
@@ -2372,7 +2441,7 @@ async function runBeforeOcr(files) {
               // keep a colour already in the field (e.g. from an earlier screenshot of the clan card)
               const cur = document.getElementById("opponentName").value.trim();
               const m = /\(([^)]*)\)\s*$/.exec(cur);
-              if(m && baseClanName(cur).toLowerCase() === base.toLowerCase()) col = cols.find(c => c.toLowerCase() === m[1].trim().toLowerCase()) || "";
+              if(m && clanKey(cur) === clanKey(base)) col = cols.find(c => c.toLowerCase() === m[1].trim().toLowerCase()) || "";
             }
             if(col) oppName = `${base} (${col})`;
             else { oppName = base; missingLogoColor = true; }
