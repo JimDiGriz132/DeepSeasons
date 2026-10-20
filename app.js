@@ -706,7 +706,7 @@ function renderCalendar(){
       const medal = CAL_MEDALS[lg] || "🏁";
       const b = document.createElement("div");
       b.className = "cal-season";
-      b.innerHTML = `<span class="cal-medal m-${lg}">${medal}</span> ${se.place ? "#" + escapeHtml(String(se.place).replace(/^#/, "")) : ""}`;
+      b.innerHTML = `<span class="cal-medal m-${lg}">${medal}</span> ${se.place ? "#" + escapeHtml(String(se.place).replace(/^#/, "")) : ""}${se.trophies ? "/" + escapeHtml(String(se.trophies)) : ""}`;
       b.title = `Season end: ${se.league || "?"}${se.place ? ", place #" + String(se.place).replace(/^#/, "") : ""}${se.trophies ? ", " + se.trophies + " trophies" : ""} (click to open)`;
       const lbl = document.createElement("div");
       lbl.className = "cal-season-lbl";
@@ -3088,7 +3088,8 @@ function anTimeChart(el, pts, { invert = false, color = "#3d6fd6", fmt = anFmtN,
     seg.push(pt_);
   });
   flush();
-  const dots = pts.map((p, i) => `<circle class="an-dot" cx="${Xi(i).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="3.5" fill="${color}"/>`).join("");
+  // final standing of a season (p.end) gets its own colour and a slightly bigger dot
+  const dots = pts.map((p, i) => `<circle class="an-dot" data-r="${p.end ? 5.5 : 3.5}" cx="${Xi(i).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${p.end ? 5.5 : 3.5}" fill="${p.end ? "#e8590c" : color}"${p.end ? ' stroke="#fff" stroke-width="1.5"' : ""}/>`).join("");
   const hits = pts.map((p, i) => `<circle class="an-hit" data-i="${i}" cx="${Xi(i).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="9" fill="transparent" style="cursor:pointer"/>`).join("");
   // axis break marks (//) in the middle of every gap
   let breaks = "";
@@ -3153,14 +3154,53 @@ function anTimeChart(el, pts, { invert = false, color = "#3d6fd6", fmt = anFmtN,
       tip.style.left = Math.max(0, left) + "px";
       tip.style.top = Math.max(0, e.clientY - r.top - tip.offsetHeight - 10) + "px";
     });
-    h.addEventListener("mouseleave", () => { dotEls[i].setAttribute("r", "3.5"); tip.style.display = "none"; });
+    h.addEventListener("mouseleave", () => { dotEls[i].setAttribute("r", dotEls[i].dataset.r || "3.5"); tip.style.display = "none"; });
   });
 }
 
+// ---- range slider (from-to) under the growth charts ---------------------------
+// The slider works on the distinct dates of the data points (so rest months / gaps do not
+// take up slider space). The chosen range is remembered as timestamps (null = open end),
+// so a re-render keeps it and a "to the end" selection keeps following new data.
+let anGrowthLo = null, anGrowthHi = null;
 function anGrowth(growth){
+  let box = document.getElementById("anGrowthRange");
+  if(!box){
+    box = document.createElement("div"); box.id = "anGrowthRange";
+    anEl("anGrowthPosition").insertAdjacentElement("afterend", box);
+  }
+  const ds = [...new Set(growth.map(x => x.date.getTime()))].sort((a, b) => a - b), n = ds.length;
+  if(n < 4){ box.innerHTML = ""; anGrowthDraw(growth); return; }
+  let lo = 0, hi = n - 1;
+  if(anGrowthLo != null){ lo = ds.findIndex(t => t >= anGrowthLo); if(lo < 0) lo = n - 1; }
+  if(anGrowthHi != null){ hi = -1; ds.forEach((t, k) => { if(t <= anGrowthHi) hi = k; }); if(hi < 0) hi = 0; }
+  if(hi - lo < 1){ if(hi < n - 1) hi = lo + 1; else lo = hi - 1; }
+  box.innerHTML = `<div class="an-range">
+    <div class="an-range-top"><span id="anRangeLbl"></span><button type="button" class="an-range-btn" id="anRangeAll">Show all</button></div>
+    <div class="an-range-track"><div class="an-range-bar"><div id="anRangeSel"></div></div>
+      <input type="range" id="anRangeLo" min="0" max="${n - 1}" step="1" value="${lo}" aria-label="From">
+      <input type="range" id="anRangeHi" min="0" max="${n - 1}" step="1" value="${hi}" aria-label="To"></div></div>`;
+  const rLo = anEl("anRangeLo"), rHi = anEl("anRangeHi");
+  const apply = () => {
+    const a = +rLo.value, b = +rHi.value;
+    anGrowthLo = a === 0 ? null : ds[a];
+    anGrowthHi = b === n - 1 ? null : ds[b];
+    const sel = anEl("anRangeSel");
+    sel.style.left = (100 * a / (n - 1)) + "%"; sel.style.width = (100 * (b - a) / (n - 1)) + "%";
+    const sub = growth.filter(x => { const t = x.date.getTime(); return t >= ds[a] && t <= ds[b]; });
+    anEl("anRangeLbl").textContent = `${anFmtDate(new Date(ds[a]))} → ${anFmtDate(new Date(ds[b]))}  (${sub.length} of ${growth.length} points)`;
+    anGrowthDraw(sub);
+  };
+  rLo.addEventListener("input", () => { if(+rLo.value > +rHi.value - 1) rLo.value = +rHi.value - 1; apply(); });
+  rHi.addEventListener("input", () => { if(+rHi.value < +rLo.value + 1) rHi.value = +rLo.value + 1; apply(); });
+  anEl("anRangeAll").addEventListener("click", () => { rLo.value = 0; rHi.value = n - 1; apply(); });
+  apply();
+}
+
+function anGrowthDraw(growth){
   const longDate = d => d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
   const mk = x => ({
-    date: x.date,
+    date: x.date, end: !!x.seasonEnd,
     lines: [longDate(x.date),
       x.trophies != null ? `Trophies: ${x.trophies}` : null,
       x.position != null ? `Position: #${x.position}` : null,
