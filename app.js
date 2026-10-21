@@ -1583,10 +1583,21 @@ function collectKnownMapsAndFish(){
 }
 // Map and fish names are always stored in Title Case so the same name always groups together.
 function canonicalName(raw){
-  return titleCase(raw);
+  const t = titleCase(raw), C = window.FishCatalog;
+  if(!t || !C || !C.ready()) return t;
+  return C.canonFish(t) || C.canonMap(t) || t; // official spelling from data.json when it is a known fish / map
 }
 function refreshMapSetSuggestions(){
   const { maps, fish } = collectKnownMapsAndFish();
+  const C = window.FishCatalog;
+  if(C && C.ready()){
+    C.mapNames().forEach(n => { if(!maps.has(n.toLowerCase())) maps.set(n.toLowerCase(), n); });
+    const onMap = C.fishForMap(document.getElementById("mapName").value);
+    if(onMap.length){ // map is known -> only offer fish that exist on that map
+      fish.clear();
+      onMap.forEach(n => fish.set(n.toLowerCase(), n));
+    } else C.fishNames().forEach(n => { if(!fish.has(n.toLowerCase())) fish.set(n.toLowerCase(), n); });
+  }
   const fill = (id, m) => {
     const dl = document.getElementById(id);
     dl.innerHTML = [...m.values()].sort().map(v => `<option value="${escapeHtml(v)}"></option>`).join("");
@@ -1602,6 +1613,54 @@ function readMapSetFromInputs(){
     .filter(Boolean);
   return { mapName, fishSet };
 }
+
+// Manual entry: typing a fish that belongs to exactly one set (together with the map / other fish
+// already typed) fills the other 3 fish (and the map) automatically.
+let autoSetFish = [], autoMap = "", clearedFish = new Set(); // clearedFish: slots the user emptied on purpose
+function autofillSetFromFish(changedId){
+  const C = window.FishCatalog;
+  if(!C || !C.ready() || !isAdmin) return;
+  const ins = [1,2,3,4].map(i => document.getElementById("fish"+i));
+  const mapEl = document.getElementById("mapName");
+  const low = v => String(v || "").trim().toLowerCase();
+  const isAuto = v => !v.trim() || autoSetFish.includes(low(v));
+  const mapVal = mapEl.value.trim();
+  if(!document.getElementById(changedId).value.trim()) return; // the user just deleted this fish: do not refill it
+  const typed = ins.map(i => i.value.trim()).filter(Boolean);
+  if(!typed.length) return;
+  let cands = C.setsWithFish(typed, mapVal);
+  if(!cands.length) cands = C.setsWithFish(typed, "");
+  if(!cands.length && changedId){ // one fish of an autofilled set was replaced -> look at that fish alone
+    const only = document.getElementById(changedId).value.trim();
+    if(only){
+      cands = C.setsWithFish([only], mapVal);
+      if(!cands.length) cands = C.setsWithFish([only], "");
+    }
+  }
+  if(cands.length !== 1) return;
+  const set = cands[0];
+  const have = new Set();
+  ins.forEach(i => { const c = C.canonFish(i.value); if(c && set.names.includes(c)) have.add(c); });
+  const rest = set.names.filter(n => !have.has(n));
+  ins.forEach(i => {
+    const c = C.canonFish(i.value);
+    if(c && set.names.includes(c)){ i.value = c; return; }
+    if(i.id === changedId && i.value.trim()) return; // never overwrite what was just typed
+    if(isAuto(i.value) && rest.length && !clearedFish.has(i.id)) i.value = rest.shift();
+  });
+  if(!mapVal || low(mapVal) === low(autoMap)){ mapEl.value = set.map; autoMap = set.map; refreshMapSetSuggestions(); }
+  autoSetFish = set.names.map(low);
+}
+{ const mp = document.getElementById("mapName"); if(mp){ mp.addEventListener("input", refreshMapSetSuggestions); mp.addEventListener("change", refreshMapSetSuggestions); } }
+document.querySelectorAll(".fishInput").forEach(inp => {
+  // picking from the suggestion list fires "input" without inputType; typing fires "change" on blur
+  inp.addEventListener("input", ev => {
+    if(inp.value.trim()) clearedFish.delete(inp.id); else clearedFish.add(inp.id);
+    if([1,2,3,4].every(i => !document.getElementById("fish"+i).value.trim())) clearedFish.clear();
+    if(!ev.inputType || ev.inputType === "insertReplacementText") autofillSetFromFish(inp.id);
+  });
+  inp.addEventListener("change", () => autofillSetFromFish(inp.id));
+});
 
 function openEditor(y, m, d){
   cancelAiSession();
@@ -1632,6 +1691,7 @@ function openEditor(y, m, d){
   document.getElementById("mapName").value = titleCase(editorFight.mapName);
   for(let i=1;i<=4;i++) document.getElementById("fish"+i).value = titleCase((editorFight.fishSet || [])[i-1]);
   refreshMapSetSuggestions();
+  autoSetFish = []; autoMap = ""; clearedFish.clear();
 
   document.getElementById("beforeOcrStatus").textContent = "";
   document.getElementById("afterOcrStatus").textContent = "";
@@ -2318,11 +2378,17 @@ async function runBeforeOcr(files) {
       statusEl.textContent = `Analyzing ${files.length} image(s) in one AI request...`;
       
       const ourName = (state.ourClanName || "our clan").trim();
+      const catList = (window.FishCatalog && window.FishCatalog.promptList()) || "";
+      const catBlock = catList ? `
+      KNOWN SETS (official ENGLISH names from the game database; format "id | map | 4 fish"):
+      ${catList.split("\n").join("\n      ")}
+      The screenshot may be in ANY language (French, German, Spanish, Portuguese, ...), so the map and fish names can be localized (e.g. "Piranha rouge" = Red Piranha). Compare the 4 fish shown (their names AND their pictures) with the list above and put the id of the SAME set into "matchedSetId" (empty string if none matches). "mapName" and every entry of "fishSet" must be the ENGLISH names from this list, never in the screenshot's language. If the set is not in the list, give your best English names.
+      ` : "";
       const prompt = `These are pre-fight screenshot(s) from Creatures of the Deep clan war. Our clan's name is literally "${ourName}".
 
       You may receive SEVERAL images in this one request (standings header, opponent clan card, map/set popup — in any order). Look at ALL of them and combine everything into ONE single JSON object: take each field from whichever image actually shows it, and leave a field empty only if NO image shows it. The rules below apply to each image individually.
 
-      The image may ALSO be a map/set screenshot instead of a standings screenshot: it shows the name of the fishing MAP (e.g. "Great Lakes") and the SET of exactly 4 fish names for that map. If so, fill "mapName" and "fishSet" (the 4 fish names exactly as printed, in the order shown, left-to-right/top-to-bottom). A map/set popup has the map name as a title in a purple header and the text "TOURNAMENT FISH!" with 4 fish below; the dimmed background behind it is NOT relevant — for such an image leave ALL other fields null/empty (ourTrophies, ourPosition, opponentName, oppTrophies, oppPosition) and ignore the "#---" next to the trophy icon and the timer. If the image has no map/fish info, set "mapName" to "" and "fishSet" to []. Never invent fish names.
+      The image may ALSO be a map/set screenshot instead of a standings screenshot: it shows the name of the fishing MAP (e.g. "Great Lakes") and the SET of exactly 4 fish names for that map. If so, fill "mapName" and "fishSet" (the 4 fish names exactly as printed, in the order shown, left-to-right/top-to-bottom). A map/set popup has the map name as a title in a purple header and the text "TOURNAMENT FISH!" with 4 fish below; the dimmed background behind it is NOT relevant — for such an image leave ALL other fields null/empty (ourTrophies, ourPosition, opponentName, oppTrophies, oppPosition) and ignore the "#---" next to the trophy icon and the timer. If the image has no map/fish info, set "mapName" to "" and "fishSet" to []. Never invent fish names.${catBlock}
 
       Otherwise TWO kinds of info blocks appear:
       1. Our OWN status header: unlabeled (no clan name/logo), just a league name, "#position", and a trophy number next to a cup icon. Always belongs to "${ourName}".
@@ -2343,7 +2409,8 @@ async function runBeforeOcr(files) {
         "oppTrophies": 72,
         "oppPosition": 21,
         "mapName": "",
-        "fishSet": []
+        "fishSet": [],
+        "matchedSetId": ""
       }
       "opponentNameLatin": only if "opponentName" has Japanese/Korean/Chinese/other non-Latin script — give a romanization or short translation; otherwise leave "".
       Leave a field empty/null only if genuinely not visible. "ourLeagueName": the league name printed in OUR status header (Warm-up, Novice, Bronze, Silver or Gold), or "" if not visible.`;
@@ -2372,10 +2439,18 @@ async function runBeforeOcr(files) {
       {
         const { maps, fish } = collectKnownMapsAndFish();
         const mapRaw = typeof parsed.mapName === "string" ? parsed.mapName : "";
-        const names = Array.isArray(parsed.fishSet)
+        let names = Array.isArray(parsed.fishSet)
           ? parsed.fishSet.map(n => canonicalName(n, fish)).filter(Boolean).slice(0, 4)
           : [];
-        if(mapRaw.trim()) document.getElementById("mapName").value = canonicalName(mapRaw, maps);
+        let mapOut = mapRaw.trim() ? canonicalName(mapRaw, maps) : "";
+        // Screenshot in another language: match against data.json and use the existing set (English names)
+        const C = window.FishCatalog;
+        const res = (C && C.ready() && names.length) ? C.resolve(names, mapRaw, String(parsed.matchedSetId || "").trim()) : null;
+        if(res){
+          names = res.names; mapOut = res.map;
+          autoSetFish = res.names.map(n => n.toLowerCase()); autoMap = res.map; clearedFish.clear();
+        }
+        if(mapOut){ document.getElementById("mapName").value = mapOut; refreshMapSetSuggestions(); }
         if(names.length){
           for(let k=1;k<=4;k++) document.getElementById("fish"+k).value = names[k-1] || "";
         }
@@ -3710,6 +3785,7 @@ refreshClanLogoUI();
 // leaderboard and nobody is ever listed as "worst".
 // =====================================================================
 const RECAP_ITEMS = [
+  { k: "seasonend", label: "🏁 Season end rank & league" },
   { k: "avg", label: "Average clan score" },
   { k: "bigwin", label: "Biggest win" },
   { k: "closewin", label: "Closest win" },
@@ -3770,6 +3846,13 @@ function recapBuild(key){
   const vs = x => `${x.opp ? "vs " + x.opp : "vs opponent"} · ${fmtD(x.date)}`;
   const margin = x => Math.abs(x.our - x.their);
   const out = { key, name: recapMonthName(key), n: curS.length, isRest: !!(curS[0] && curS[0].isRest), tiles: [], awards: [] };
+  { // season end standing that closes this month (a season end dated in the first 3 days of the next month counts too)
+    const [yy, mm] = key.split("-").map(Number), nk = mm === 12 ? `${yy + 1}-01` : `${yy}-${String(mm + 1).padStart(2, "0")}`;
+    const hit = Object.entries(state.seasonEnds || {})
+      .filter(([k, v]) => v && (v.place || v.trophies) && (k.slice(0, 7) === key || (k.slice(0, 7) === nk && +k.slice(8, 10) <= 3)))
+      .sort((p, q) => p[0].localeCompare(q[0])).pop();
+    if(hit) out.seasonEnd = { place: parseScoreVal(hit[1].place), trophies: parseScoreVal(hit[1].trophies), league: String(hit[1].league || "").trim() };
+  }
   if(!curS.length) return out;
   const tile = (k, label, value, sub) => out.tiles.push({ k, label, value, sub: sub || "" });
 
@@ -3893,6 +3976,7 @@ function recapCardHtml(data){
     <div class="rc-head">${logoHtml}
       <div class="rc-head-txt"><div class="rc-clan">${esc(state.ourClanName)}</div><div class="rc-month">Clan Wars · ${esc(data.name)}</div></div>
     </div>
+    ${data.seasonEnd && !recapOff.has("seasonend") ? `<div class="rc-season"><div class="rc-se-l">🏁 SEASON END</div>${data.seasonEnd.place != null ? `<div class="rc-se-rank">#${esc(anFmtN(data.seasonEnd.place))}</div>` : ""}${data.seasonEnd.league ? `<div class="rc-se-league">${esc(data.seasonEnd.league)} league</div>` : ""}${data.seasonEnd.trophies != null ? `<div class="rc-se-tr">${esc(anFmtN(data.seasonEnd.trophies))} 🏆</div>` : ""}</div>` : ""}
     <div class="rc-record">
       <div class="rc-rec-big">${rec}</div>
       <div class="rc-rec-sub">${data.n} fights · ${Math.round(data.winPct)}% win rate</div>

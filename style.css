@@ -395,6 +395,11 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .rc-head-txt{min-width:0;}
 .rc-clan{font-size:84px;font-weight:900;line-height:1.05;letter-spacing:.01em;}
 .rc-month{font-size:42px;font-weight:600;color:#9be7bd;margin-top:10px;}
+.rc-season{margin-top:30px;display:flex;align-items:center;justify-content:center;gap:28px;flex-wrap:wrap;padding:20px 30px;border-radius:30px;background:rgba(255,214,102,.14);border:2px solid rgba(255,214,102,.45);}
+.rc-se-l{font-size:28px;font-weight:800;letter-spacing:.08em;color:#ffd666;}
+.rc-se-rank{font-size:72px;font-weight:900;line-height:1;}
+.rc-se-league{font-size:46px;font-weight:800;color:#fff;}
+.rc-se-tr{font-size:36px;font-weight:700;color:#cfeedd;}
 .rc-record{margin-top:36px;padding:28px 30px;border-radius:30px;background:rgba(255,255,255,.1);border:2px solid rgba(255,255,255,.16);text-align:center;}
 .rc-rec-big{font-size:112px;font-weight:900;line-height:1.05;letter-spacing:.02em;}
 .rc-rec-sub{font-size:42px;font-weight:600;color:#cfeedd;margin-top:12px;}

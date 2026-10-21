@@ -40,6 +40,60 @@
     return f ? { id: f.id, name: f.name, rarity: f.rarity || "common", oos: f.oos || [] }
              : { id: "?" + norm(name), name, rarity: "common", oos: [] };
   }
+  // ---- Shared catalog (used by app.js: pre-fight AI translation + manual set autofill) ----
+  const mapIdOf = name => {
+    const n = norm(name); if(!n || !DATA) return "";
+    for(const [id, nm] of DATA.maps) if(norm(nm) === n) return id;
+    for(const [id, nm] of DATA.maps) if(n.length >= 4 && (norm(nm).includes(n) || n.includes(norm(nm)))) return id;
+    return "";
+  };
+  const fishById = id => DATA.fishes.find(f => f.id === id) || { name: id };
+  window.FishCatalog = {
+    ready: () => !!DATA,
+    mapNames: () => DATA ? [...DATA.maps.values()] : [],
+    fishNames: () => DATA ? DATA.fishes.map(f => f.name) : [],
+    // exact (case/punctuation-insensitive) match only -> official English spelling, or ""
+    canonFish: name => { const f = DATA && DATA.byNorm.get(norm(name)); return f ? f.name : ""; },
+    // fish names that exist on the given map (empty list if the map is unknown)
+    fishForMap: mapName => {
+      const id = mapIdOf(mapName); if(!DATA || !id) return [];
+      const out = new Set();
+      DATA.sets.filter(s => s.map_id === id).forEach(s => s.fishes.forEach(f => out.add(fishById(f).name)));
+      return [...out];
+    },
+    canonMap: name => { const id = mapIdOf(name); return id ? DATA.maps.get(id) : ""; },
+    // compact list of all known sets for the AI prompt
+    promptList: () => DATA ? DATA.sets.map(s => `${s.id} | ${DATA.maps.get(s.map_id) || ""} | ${s.fishes.map(id => fishById(id).name).join(", ")}`).join("\n") : "",
+    // names read from a (possibly non-English) screenshot -> the real set from data.json
+    resolve: (names, mapName, aiSetId) => {
+      if(!DATA) return null;
+      const ids = new Set((names || []).map(findFish).filter(Boolean).map(f => f.id));
+      const mapId = mapIdOf(mapName);
+      let best = null, bestN = 0, tie = false;
+      DATA.sets.forEach(s => {
+        if(mapId && s.map_id !== mapId) return;
+        const n = s.fishes.filter(id => ids.has(id)).length;
+        if(n > bestN){ best = s; bestN = n; tie = false; } else if(n === bestN && n > 0) tie = true;
+      });
+      let set = (best && bestN >= 3 && !tie) ? best : null, how = set ? "names" : "";
+      if(!set && aiSetId){
+        const s = DATA.sets.find(x => x.id === aiSetId);
+        if(s && (!mapId || s.map_id === mapId)){ set = s; how = "ai"; }
+      }
+      return set ? { set, how, map: DATA.maps.get(set.map_id) || "", names: set.fishes.map(id => fishById(id).name) } : null;
+    },
+    // sets that contain ALL the given fish (and are on the given map, if it is known)
+    setsWithFish: (names, mapName) => {
+      if(!DATA) return [];
+      const ids = [];
+      for(const n of names){ const f = findFish(n); if(!f) return []; ids.push(f.id); }
+      if(!ids.length) return [];
+      const mapId = mapIdOf(mapName);
+      const hit = s => ids.every(id => s.fishes.includes(id));
+      return DATA.sets.filter(s => hit(s) && (!mapId || s.map_id === mapId))
+        .map(s => ({ id: s.id, map: DATA.maps.get(s.map_id) || "", names: s.fishes.map(id => fishById(id).name) }));
+    }
+  };
   const allClansOn = () => !!(document.getElementById("recAllClans") || {}).checked;
   const entKey = infos => infos.map(i => i.id).sort().join("|");
   const fightInfos = x => x.setLabel.split(" · ").map(info);
