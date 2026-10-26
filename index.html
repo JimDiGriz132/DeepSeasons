@@ -47,10 +47,9 @@
       <h2 id="tableMonthLabel">August 2026.</h2>
       <span id="tableRestBadge" class="rest-badge hidden">😴 Rest month</span>
       <button id="nextMonthTable">Next Month ›</button>
-      <button id="exportBtn">Export JSON</button>
-      <button id="recapBtn">📸 Month recap</button>
+      <button id="exportBtn" class="admin-only">Export JSON</button>
+      <button id="recapBtn" class="admin-only">📸 Month recap</button>
       <label class="import-label admin-only">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label>
-      <button id="importTableBtn" class="secondary admin-only" title="Fill days from a finished table (screenshot or pasted from Excel)">📥 Import table</button>
     </div>
     <div id="tablesContainer" class="centered-table-container"></div>
   </section>
@@ -311,54 +310,6 @@
   </div>
 </div>
 
-<!-- ===================== IMPORT TABLE MODAL ===================== -->
-<div id="tableImportModal" class="modal-backdrop hidden">
-  <div class="modal import-modal">
-    <div class="modal-head">
-      <h2>Import table</h2>
-      <button id="tiClose" class="close-btn" type="button">✕</button>
-    </div>
-    <div class="modal-body">
-      <p class="hint" style="text-align:left">Add old results from a finished table. Every column is matched to its date (e.g. <b>11-Dec</b>), so it can be a whole month or just a few days. Nothing is saved until you press Import.</p>
-      <fieldset class="block">
-        <legend>1. Table</legend>
-        <div class="upload-row">
-          <label class="upload-btn">📷 Pick screenshot(s) of the table
-            <input type="file" id="tiImgInput" accept="image/*" multiple hidden>
-          </label>
-          <label class="ti-inline">Year of the first day <input type="number" id="tiYear" min="2000" max="2100" style="width:80px"></label>
-        </div>
-        <div id="tiDropZone" class="drop-zone">⬇️ Drag &amp; drop table screenshot(s) or a Discord image here, or press Ctrl+V to paste a screenshot</div>
-        <div class="upload-row url-row">
-          <input type="text" id="tiUrlInput" placeholder="or paste image link(s) (e.g. Discord), comma-separated">
-          <button id="tiUrlBtn" class="secondary" type="button">Fetch</button>
-        </div>
-        <textarea id="tiPaste" class="ti-paste" rows="4" placeholder="…or copy the table in Excel / Google Sheets and paste it here (exact, no AI needed)"></textarea>
-        <button id="tiReadPaste" class="secondary" type="button">Read pasted table</button>
-        <span id="tiStatus" class="ocr-status"></span>
-      </fieldset>
-      <fieldset class="block hidden" id="tiPreviewBlock">
-        <legend>2. Check</legend>
-        <div id="tiPreview"></div>
-        <div class="ti-options">
-          <label class="ti-inline">If a day already has data:
-            <select id="tiMode">
-              <option value="fill">only fill empty fields (keep what is saved)</option>
-              <option value="overwrite">overwrite with the table's values</option>
-            </select>
-          </label>
-          <label id="tiLeftRow" class="ti-inline hidden"><input type="checkbox" id="tiMarkLeft"> Mark the new players as "left clan"</label>
-        </div>
-        <p id="tiSummary" class="hint" style="text-align:left"></p>
-      </fieldset>
-    </div>
-    <div class="modal-foot">
-      <button id="tiCancel" class="secondary" type="button">Cancel</button>
-      <button id="tiApply" class="primary" type="button" disabled>Import</button>
-    </div>
-  </div>
-</div>
-
 <!-- ===================== ADMIN LOGIN MODAL ===================== -->
 <div id="loginModal" class="modal-backdrop hidden">
   <div class="modal small">
@@ -459,6 +410,5 @@
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <script src="app.js"></script>
 <script src="records.js"></script>
-<script src="import-table.js"></script>
 </body>
 </html>

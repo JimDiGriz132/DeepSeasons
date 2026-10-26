@@ -439,23 +439,6 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .rec-date{font-size:.68rem;color:#555;}
 .cal-day .cal-target{font-size:.72rem;font-weight:700;color:#3d6fd6;}
 .rec-controls{display:flex;gap:18px;align-items:flex-end;flex-wrap:wrap;margin-bottom:6px;}
-
-/* ===== Import table (modal) ===== */
-.import-modal{max-width:900px;}
-.ti-paste{width:100%;margin:8px 0 6px;padding:8px;border:1px solid var(--border);border-radius:6px;font-family:monospace;font-size:.78rem;box-sizing:border-box;}
-.ti-inline{display:inline-flex;align-items:center;gap:8px;font-size:.85rem;font-weight:600;margin:6px 14px 0 0;}
-.ti-inline input[type=number],.ti-inline select{padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-weight:400;}
-.ti-options{margin-top:10px;}
-.ti-table{width:100%;border-collapse:collapse;font-size:.82rem;}
-.ti-table th,.ti-table td{border-bottom:1px solid var(--border);padding:5px 8px;text-align:center;white-space:nowrap;}
-.ti-table th.left,.ti-table td.left{text-align:left;}
-.ti-table td.left{white-space:normal;}
-.ti-win{color:#1e8449;font-weight:700;}
-.ti-loss{color:#c0392b;font-weight:700;}
-.ti-draw{color:var(--gray);font-weight:700;}
-.ti-new{color:#1e8449;font-weight:600;}
-.ti-diff{color:#b9770e;font-weight:600;}
-.ti-warn{color:#b9770e;font-size:.76rem;}
 /* ---- league ring on calendar cells (inset shadow = thick ring without changing the layout) ---- */
 .cal-day{position:relative;}
 .cal-day.lg-warmup{border-color:#8a8f98;box-shadow:inset 0 0 0 4px #8a8f98;}

@@ -2717,7 +2717,7 @@ setupDropZone("afterDropZone", "afterImgUrlInput", runAfterOcr);
 
   loginBtn.addEventListener("click", async ()=>{
     if(isAdmin){
-      await sb.auth.signOut();
+      await sb.auth.signOut({ scope: 'local' });
       await refreshAdmin();
       return;
     }
@@ -2733,7 +2733,7 @@ setupDropZone("afterDropZone", "afterImgUrlInput", runAfterOcr);
     if(error){ msg.textContent = /invalid login/i.test(error.message) ? "Wrong password." : error.message; return; }
     await refreshAdmin();
     if(!isAdmin){
-      await sb.auth.signOut();
+      await sb.auth.signOut({ scope: 'local' });
       await refreshAdmin();
       msg.textContent = "This account is not an admin of the clan tracker.";
       return;
