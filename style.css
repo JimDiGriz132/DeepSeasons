@@ -383,6 +383,9 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .recap-month-pick select{padding:7px 10px;border:1px solid var(--border);border-radius:8px;margin-left:8px;}
 .recap-toggles{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;margin-bottom:6px;}
 .recap-toggle{display:flex;align-items:center;gap:5px;cursor:pointer;}
+.recap-pickers{font-size:.8rem;margin-bottom:6px;}
+.recap-pick{border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:6px 0;display:flex;flex-direction:column;gap:4px;}
+.recap-pick-t{font-weight:600;margin-bottom:2px;}
 .recap-preview-wrap{overflow:hidden;border-radius:12px;border:1px solid var(--border);margin:8px 0 12px;}
 
 /* ===== Month recap (the picture itself — 1080 px wide, big type for phones) ===== */
@@ -407,6 +410,7 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .rc-tile{min-width:0;padding:22px 24px;border-radius:26px;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.14);}
 .rc-tl{font-size:26px;font-weight:800;letter-spacing:.06em;color:#9be7bd;}
 .rc-tv{font-size:54px;font-weight:900;line-height:1.1;margin-top:8px;overflow-wrap:anywhere;}
+.rc-tv-sm{font-size:34px;line-height:1.2;}
 .rc-ts{font-size:28px;line-height:1.2;color:#cfeedd;margin-top:6px;overflow-wrap:anywhere;}
 .rc-section{font-size:46px;font-weight:900;margin:36px 0 16px;color:#fff;}
 .rc-award{display:flex;align-items:center;gap:30px;padding:26px 30px;border-radius:26px;margin-bottom:20px;
@@ -425,7 +429,7 @@ body:not(.is-admin) .admin-only{display:none !important;}
   .recap-modal .modal-head{padding:12px 12px;}
   .recap-modal .modal-body{padding:8px 4px;}
   .recap-modal .modal-foot{padding:12px 12px;gap:8px;align-items:center;}
-  .recap-modal .recap-month-pick,.recap-modal .recap-toggles,.recap-modal #recapMsg{margin-left:8px;margin-right:8px;}
+  .recap-modal .recap-month-pick,.recap-modal .recap-toggles,.recap-modal .recap-pickers,.recap-modal #recapMsg{margin-left:8px;margin-right:8px;}
   .recap-preview-wrap{border-radius:8px;margin:8px 0;}
 }
 /* Records by season (OOS) */

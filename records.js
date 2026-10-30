@@ -246,8 +246,10 @@
 
   // ---- Recap: new #1 records set in a given month ---------------
   // Only entries that beat an existing holder count (first fights of a
-  // set+scenario are never "records").
-  window.recNewRecords = function(monthKey){
+  // set+scenario are never "records"). Returns ALL candidates (biggest jump
+  // over the old record first) so the recap can let the admin pick which ones go on the picture.
+  // The card only shows the OLD record's score - never who held it.
+  window.recNewRecordList = function(monthKey){
     if(!DATA) return [];
     const raw = anCollectRaw(), ents = buildEntities(raw);
     const before = collect(raw, ents, x => x.key < monthKey + "-01");
@@ -255,18 +257,15 @@
     const gold = [];
     after.forEach((byScen, ek) => byScen.forEach((byPl, sk) => {
       const a = top3(byPl), b = top3(before.get(ek) && before.get(ek).get(sk));
-      a.forEach((h, i) => {
-        if(h.key.slice(0, 7) !== monthKey || b.length <= i) return;
-        const e = ents.get(ek), scn = scenario(e.infos, h.date.getMonth() + 1);
-        if(i === 0) gold.push({ rank: i + 1, name: h.name, score: h.score, prev: b[i], set: e.label, scn: scn.n ? scn.label : "" });
-      });
+      const h = a[0];
+      if(!h || h.key.slice(0, 7) !== monthKey || !b.length) return;
+      const e = ents.get(ek), scn = scenario(e.infos, h.date.getMonth() + 1);
+      gold.push({ id: ek + "#" + sk, name: h.name, score: h.score, prevScore: b[0].score, jump: h.score - b[0].score, set: e.label, scn: scn.n ? scn.label : "" });
     }));
-    const out = [];
-    gold.sort((x, y) => y.score - x.score).slice(0, 3).forEach(g => out.push({
-      k: "records", icon: "🏆", title: "NEW SET RECORD", who: `${g.name} · ${anFmtN(g.score)}`,
-      desc: `${g.set}${g.scn ? " (" + g.scn + " OOS)" : ""} — beat ${g.prev.name} ${anFmtN(g.prev.score)}`
-    }));
-    if(gold.length > 3 && out.length) out[out.length - 1].desc += ` · +${gold.length - 3} more record(s)`;
-    return out;
+    return gold.sort((x, y) => y.jump - x.jump || y.score - x.score); // biggest jump over the old record first
   };
+  window.recRecordAward = g => ({
+    k: "records", icon: "🏆", title: "NEW SET RECORD", who: `${g.name} · ${anFmtN(g.score)}`,
+    desc: `${g.set}${g.scn ? " (" + g.scn + " OOS)" : ""} — beat the previous record of ${anFmtN(g.prevScore)}`
+  });
 })();

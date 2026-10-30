@@ -3795,6 +3795,7 @@ const RECAP_ITEMS = [
   { k: "trophies", label: "Trophies" },
   { k: "position", label: "League position" },
   { k: "map", label: "Most frequent map" },
+  { k: "set", label: "Most frequent set" },
   { k: "toughest", label: "Toughest opponent" },
   { k: "players", label: "Players in action" },
   { k: "rising", label: "🌟 Rising Star" },
@@ -3804,6 +3805,9 @@ const RECAP_ITEMS = [
 ];
 const recapOff = new Set();
 let recapKey = "";
+let recapFreshOff = new Set();   // Fresh Fin players the admin unticked (reset when the month changes)
+let recapRecSel = null;          // ids of the picked records (max 3); null = default: the 3 with the biggest jump over the old record
+const RECAP_MAX_RECORDS = 3;
 
 function recapPrevKey(key){
   const [y, m] = key.split("-").map(Number);
@@ -3854,7 +3858,7 @@ function recapBuild(key){
     if(hit) out.seasonEnd = { place: parseScoreVal(hit[1].place), trophies: parseScoreVal(hit[1].trophies), league: String(hit[1].league || "").trim() };
   }
   if(!curS.length) return out;
-  const tile = (k, label, value, sub) => out.tiles.push({ k, label, value, sub: sub || "" });
+  const tile = (k, label, value, sub, cls) => out.tiles.push({ k, label, value, sub: sub || "", cls: cls || "" });
 
   const wins = curS.filter(x => x.res === "WIN");
   const draws = curS.filter(x => x.res === "DRAW");
@@ -3917,6 +3921,16 @@ function recapBuild(key){
     const [mn, c] = [...mapCnt.entries()].sort((a, b) => b[1] - a[1])[0];
     tile("map", "MOST FREQUENT MAP", mn, `${c} of ${cur.filter(x => x.map).length} fights`);
   }
+  { // most frequent set (the 4 fish); ties are all shown (max 2 + "+N")
+    const setCnt = new Map();
+    cur.forEach(x => { if(x.setKey && x.setLabel){ const o = setCnt.get(x.setKey) || { label: x.setLabel, c: 0 }; o.c++; setCnt.set(x.setKey, o); } });
+    if(setCnt.size){
+      const top = Math.max(...[...setCnt.values()].map(o => o.c));
+      const win = [...setCnt.values()].filter(o => o.c === top).map(o => o.label).sort();
+      const val = win.slice(0, 2).join(" | ") + (win.length > 2 ? ` +${win.length - 2} more` : "");
+      tile("set", "MOST FREQUENT SET", val, `${top} of ${cur.filter(x => x.setKey).length} fights${win.length > 1 ? " (tied)" : ""}`, "rc-tv-sm");
+    }
+  }
   const withOpp = curS.filter(x => x.opp);
   if(withOpp.length){
     const t = withOpp.reduce((a, b) => b.their > a.their ? b : a);
@@ -3959,9 +3973,19 @@ function recapBuild(key){
   all.forEach(x => Object.keys(x.playerRanks || {}).forEach(nm => { if(!firstSeen.has(nm)) firstSeen.set(nm, x.monthKey); }));
   if(all.length && all[0].monthKey < key){ // otherwise everybody would look "new"
     const fresh = [...firstSeen.entries()].filter(([, mk]) => mk === key).map(([nm]) => nm).sort();
-    if(fresh.length) out.awards.push({ k: "fresh", icon: "🐟", title: "FRESH FIN", who: recapNameList(fresh, 16), desc: "new on the scoreboard this month — welcome aboard!" });
+    out.freshAll = fresh;
+    const shown = fresh.filter(nm => !recapFreshOff.has(nm));
+    if(shown.length) out.awards.push({ k: "fresh", icon: "🐟", title: "FRESH FIN", who: recapNameList(shown, 16), desc: "new on the scoreboard this month — welcome aboard!" });
   }
-  if(window.recNewRecords) window.recNewRecords(key).forEach(x => out.awards.push(x));
+  if(window.recNewRecordList){
+    const cands = window.recNewRecordList(key);
+    out.recCands = cands;
+    const sel = recapRecSel ? cands.filter(c => recapRecSel.has(c.id)) : cands.slice(0, RECAP_MAX_RECORDS);
+    const shownRec = sel.slice(0, RECAP_MAX_RECORDS);
+    shownRec.forEach(c => out.awards.push(window.recRecordAward(c)));
+    const moreRec = cands.length - shownRec.length;
+    if(shownRec.length && moreRec > 0) out.awards[out.awards.length - 1].desc += ` · +${moreRec} more record(s)`;
+  }
   return out;
 }
 
@@ -3981,7 +4005,7 @@ function recapCardHtml(data){
       <div class="rc-rec-big">${rec}</div>
       <div class="rc-rec-sub">${data.n} fights · ${Math.round(data.winPct)}% win rate</div>
     </div>
-    ${tiles.length ? `<div class="rc-tiles">${tiles.map(t => `<div class="rc-tile"><div class="rc-tl">${esc(t.label)}</div><div class="rc-tv">${esc(t.value)}</div><div class="rc-ts">${esc(t.sub)}</div></div>`).join("")}</div>` : ""}
+    ${tiles.length ? `<div class="rc-tiles">${tiles.map(t => `<div class="rc-tile"><div class="rc-tl">${esc(t.label)}</div><div class="rc-tv${t.cls ? " " + t.cls : ""}">${esc(t.value)}</div><div class="rc-ts">${esc(t.sub)}</div></div>`).join("")}</div>` : ""}
     ${awards.length ? `<div class="rc-section">Shout-outs</div>` + awards.map(a => `<div class="rc-award"><div class="rc-ico">${a.icon}</div><div class="rc-atxt"><div class="rc-atitle">${esc(a.title)}</div><div class="rc-awho${a.who.length > 90 ? " rc-awho-xs" : a.who.length > 38 ? " rc-awho-sm" : ""}">${esc(a.who)}</div><div class="rc-adesc">${esc(a.desc)}</div></div></div>`).join("") : ""}
     <div class="rc-foot">Every fight counts — thank you all! 🎣</div>
   </div>`;
@@ -3997,10 +4021,44 @@ function recapFit(){
   wrap.style.height = Math.ceil(card.offsetHeight * s) + "px";
 }
 
-function recapRender(){
+// "Choose who / which" lists under the toggles: Fresh Fin players + new set records
+function recapRenderPickers(data){
+  const box = document.getElementById("recapPickers");
+  if(!box) return;
+  const esc = escapeHtml;
+  let html = "";
+  if(data.freshAll && data.freshAll.length){
+    html += `<div class="recap-pick"><div class="recap-pick-t">🐟 Fresh Fin — who to show</div>` +
+      data.freshAll.map(nm => `<label class="recap-toggle"><input type="checkbox" data-fresh="${esc(nm)}" ${recapFreshOff.has(nm) ? "" : "checked"}> ${esc(nm)}</label>`).join("") + `</div>`;
+  }
+  if(data.recCands && data.recCands.length){
+    const selIds = recapRecSel || new Set(data.recCands.slice(0, RECAP_MAX_RECORDS).map(c => c.id));
+    const full = selIds.size >= RECAP_MAX_RECORDS;
+    html += `<div class="recap-pick"><div class="recap-pick-t">🏆 New set records — pick up to ${RECAP_MAX_RECORDS} (${data.recCands.length} this month) <span style="font-weight:400">· default: the ${RECAP_MAX_RECORDS} with the biggest jump over the old record</span></div>` +
+      data.recCands.map(c => {
+        const on = selIds.has(c.id);
+        return `<label class="recap-toggle"><input type="checkbox" data-rec="${esc(c.id)}" ${on ? "checked" : ""} ${!on && full ? "disabled" : ""}> ${esc(c.name)} · ${esc(anFmtN(c.score))} (+${esc(anFmtN(c.jump))}) — ${esc(c.set)}${c.scn ? " (" + esc(c.scn) + " OOS)" : ""}</label>`;
+      }).join("") + `</div>`;
+  }
+  box.innerHTML = html;
+  box.querySelectorAll("input[data-fresh]").forEach(cb => cb.addEventListener("change", () => {
+    if(cb.checked) recapFreshOff.delete(cb.dataset.fresh); else recapFreshOff.add(cb.dataset.fresh);
+    recapRender(true);
+  }));
+  box.querySelectorAll("input[data-rec]").forEach(cb => cb.addEventListener("change", () => {
+    const cur = new Set(recapRecSel || data.recCands.slice(0, RECAP_MAX_RECORDS).map(c => c.id));
+    if(cb.checked) cur.add(cb.dataset.rec); else cur.delete(cb.dataset.rec);
+    recapRecSel = cur;
+    recapRender(true);
+  }));
+}
+
+function recapRender(keepPicks){
   const key = document.getElementById("recapMonth").value;
+  if(keepPicks !== true && key !== recapKey){ recapFreshOff = new Set(); recapRecSel = null; } // new month -> fresh picks
   recapKey = key;
   const data = recapBuild(key);
+  recapRenderPickers(data);
   const msg = document.getElementById("recapMsg");
   const dl = document.getElementById("recapDownload");
   const holder = document.getElementById("recapCard");
@@ -4066,6 +4124,6 @@ async function recapDownload(){
 document.getElementById("recapBtn").addEventListener("click", openRecap);
 document.getElementById("recapClose").addEventListener("click", () => document.getElementById("recapModal").classList.add("hidden"));
 document.getElementById("recapModal").addEventListener("click", ev => { if(ev.target.id === "recapModal") ev.currentTarget.classList.add("hidden"); });
-document.getElementById("recapMonth").addEventListener("change", recapRender);
+document.getElementById("recapMonth").addEventListener("change", () => recapRender());
 document.getElementById("recapDownload").addEventListener("click", recapDownload);
 window.addEventListener("resize", recapFit);
