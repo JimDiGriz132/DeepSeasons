@@ -466,37 +466,75 @@ normalizePlayerCasing();
 // "Maiikol"). Without this, older saved fights can end up with a rank stored
 // under a differently-cased key than the one shown in the players list,
 // which makes the table show "-" for a day that actually has data.
+// --- player-name matching ----------------------------------------------------
+// The same player can come out of the OCR in slightly different shapes:
+//  - different casing                       "MAIIKOL" / "Maiikol"
+//  - with / without a decorative symbol     "Ji-Ji ☆" / "Ji-Ji"
+//  - cut off by the game with "..."         "Crimson_Ha..." / "Crimson_Hawk"
+// playerKey() ignores case, spaces and symbols; a name ending in "..." (or "…")
+// is treated as a truncated prefix and is matched to the ONE known player it
+// could be (if it's ambiguous, it is left alone).
+function playerKey(n){
+  const t = String(n || "").normalize("NFKC").toLowerCase();
+  return t.replace(/[^\p{L}\p{N}]/gu, "") || t.trim();
+}
+function truncatedPrefix(n){ // "Crimson_Ha..." -> "Crimson_Ha"; null if the name isn't truncated
+  const m = /^(.*?)\s*(?:\.{2,}|…)\s*$/.exec(String(n || "").trim());
+  return m ? m[1] : null;
+}
+function resolvePlayerName(name, pool){
+  name = String(name || "").trim();
+  if(!name) return name;
+  const key = playerKey(name);
+  const exact = pool.find(p => playerKey(p) === key);
+  if(exact) return exact;
+  const pre = truncatedPrefix(name);
+  if(pre !== null){
+    const pk = playerKey(pre);
+    if(pk.length >= 3){
+      const cands = pool.filter(p => truncatedPrefix(p) === null && playerKey(p).startsWith(pk));
+      if(cands.length === 1) return cands[0];
+    }
+  }
+  return name;
+}
+
+// Runs on every load (only writes if something actually changed): merges name
+// variants (see above) in the roster and in every saved fight.
 function normalizePlayerCasing(){
-  const canonicalByLower = {};
-  state.players.forEach(p=>{
-    const key = p.toLowerCase();
-    if(!(key in canonicalByLower)) canonicalByLower[key] = p;
-  });
+  const allNames = [];
+  const addName = n => { if(n && !allNames.includes(n)) allNames.push(n); };
+  state.players.forEach(addName);
   Object.values(state.fights).forEach(f=>{
-    if(!f.playerRanks) return;
-    Object.keys(f.playerRanks).forEach(name=>{
-      const key = name.toLowerCase();
-      if(!(key in canonicalByLower)) canonicalByLower[key] = name;
-    });
+    Object.keys(f.playerRanks || {}).forEach(addName);
+    Object.keys(f.playerScores || {}).forEach(addName);
   });
+
+  // 1st pass: full names (first spelling wins), 2nd pass: truncated ones
+  const canonList = [];
+  const mapping = {};
+  allNames.filter(n => truncatedPrefix(n) === null).forEach(n=>{
+    const c = resolvePlayerName(n, canonList);
+    if(c === n) canonList.push(n);
+    mapping[n] = c;
+  });
+  allNames.filter(n => truncatedPrefix(n) !== null).forEach(n=>{
+    const c = resolvePlayerName(n, canonList);
+    if(c === n) canonList.push(n);
+    mapping[n] = c;
+  });
+  const canonOf = n => mapping[n] || n;
 
   let changed = false;
 
   const seen = new Set();
   const newPlayers = [];
   state.players.forEach(p=>{
-    const key = p.toLowerCase();
-    if(!seen.has(key)){
-      seen.add(key);
-      newPlayers.push(canonicalByLower[key]);
-    }
+    const c = canonOf(p);
+    if(!seen.has(c)){ seen.add(c); newPlayers.push(c); }
   });
-  Object.values(canonicalByLower).forEach(p=>{
-    const key = p.toLowerCase();
-    if(!seen.has(key)){
-      seen.add(key);
-      newPlayers.push(p);
-    }
+  canonList.forEach(p=>{
+    if(!seen.has(p)){ seen.add(p); newPlayers.push(p); }
   });
   if(JSON.stringify(newPlayers) !== JSON.stringify(state.players)){
     state.players = newPlayers;
@@ -507,7 +545,7 @@ function normalizePlayerCasing(){
     if(!f.playerRanks) return;
     const rebuilt = {};
     Object.entries(f.playerRanks).forEach(([name, rank])=>{
-      const canon = canonicalByLower[name.toLowerCase()] || name;
+      const canon = canonOf(name);
       if(!(canon in rebuilt)) rebuilt[canon] = rank;
       if(canon !== name) changed = true;
     });
@@ -515,7 +553,7 @@ function normalizePlayerCasing(){
     if(f.playerScores){
       const rebuiltScores = {};
       Object.entries(f.playerScores).forEach(([name, sc])=>{
-        const canon = canonicalByLower[name.toLowerCase()] || name;
+        const canon = canonOf(name);
         if(!(canon in rebuiltScores)) rebuiltScores[canon] = sc;
       });
       f.playerScores = rebuiltScores;
@@ -535,7 +573,7 @@ function ensurePlayer(name){
   if(!name) return;
   name = name.trim();
   if(!name) return;
-  if(!state.players.some(p => p.toLowerCase() === name.toLowerCase())){
+  if(resolvePlayerName(name, state.players) === name && !state.players.includes(name)){
     state.players.push(name);
   }
 }
@@ -547,9 +585,7 @@ function ensurePlayer(name){
 // that actually have data, just stored under a differently-cased name.
 function canonicalPlayerName(name){
   if(!name) return name;
-  name = name.trim();
-  const existing = state.players.find(p => p.toLowerCase() === name.toLowerCase());
-  return existing || name;
+  return resolvePlayerName(name, state.players);
 }
 
 // ---------------------------------------------------------
@@ -1444,7 +1480,7 @@ function renamePlayer(oldName, newNameRaw){
     return;
   }
 
-  const collision = state.players.find(p => p.toLowerCase() === newName.toLowerCase() && p !== oldName);
+  const collision = state.players.find(p => playerKey(p) === playerKey(newName) && p !== oldName);
   const targetName = collision || newName;
 
   state.players = state.players.filter(p => p !== oldName);
@@ -1849,11 +1885,11 @@ document.getElementById("saveFightBtn").addEventListener("click", async ()=>{
     const rawName = tr.querySelector(".nameInput").value.trim();
     const rank = tr.querySelector(".rankInput").value;
     if(rawName && rank!==""){
-      const name = playersAfter.find(p => p.toLowerCase() === rawName.toLowerCase()) || rawName;
+      const name = resolvePlayerName(rawName, playersAfter);
       fight.playerRanks[name] = Number(rank);
       const sc = parseScoreVal(tr.querySelector(".scoreInput").value);
       if(sc !== null) fight.playerScores[name] = sc;
-      if(!playersAfter.some(p => p.toLowerCase() === name.toLowerCase())) playersAfter.push(name);
+      if(!playersAfter.includes(name)) playersAfter.push(name);
     }
   });
 
@@ -2631,35 +2667,37 @@ async function runAfterOcr(files) {
       // plain truthiness check here — only skip null/undefined/empty string.
       const hasScore = (v) => v !== null && v !== undefined && String(v).trim() !== "";
       const cleanScore = (v) => String(v).replace(/[\s,.]/g, "");
-      if(hasScore(parsed.ourFinalScore) && !document.getElementById("ourFinalScore").value){
+      // New screenshots OVERWRITE whatever is already in the final score fields.
+      if(hasScore(parsed.ourFinalScore)){
         document.getElementById("ourFinalScore").value = cleanScore(parsed.ourFinalScore);
       }
-      if(hasScore(parsed.theirFinalScore) && !document.getElementById("theirFinalScore").value){
+      if(hasScore(parsed.theirFinalScore)){
         document.getElementById("theirFinalScore").value = cleanScore(parsed.theirFinalScore);
       }
       updateResultPreview();
 
       if(parsed.rows && Array.isArray(parsed.rows)){
+        // New screenshots OVERWRITE existing players: a row is matched by rank first
+        // (so a wrong/old name gets replaced), then by name; its name, rank and score
+        // are all replaced with what the screenshot says. Rows the screenshot doesn't
+        // cover (other ranks) are kept, so several uploads can be combined.
+        const used = new Set();
         parsed.rows.forEach(r => {
           if(!r.name || r.rank == null) return;
           const rows = Array.from(document.querySelectorAll("#playerRows tr"));
           const rName = String(r.name).trim().toLowerCase();
-          // Prefer a match by name; fall back to the same rank.
-          const match = rows.find(tr => tr.querySelector(".nameInput").value.trim().toLowerCase() === rName)
-                     || rows.find(tr => tr.querySelector(".rankInput").value == r.rank);
           const sc = parseScoreVal(r.score);
+          const match = rows.find(tr => !used.has(tr) && String(tr.querySelector(".rankInput").value).trim() === String(r.rank).trim())
+                     || rows.find(tr => !used.has(tr) && tr.querySelector(".nameInput").value.trim().toLowerCase() === rName);
 
           if(match){
-            // Row already exists (e.g. day imported from an old JSON that only had ranks):
-            // fill in what's missing instead of skipping it.
-            const scoreInput = match.querySelector(".scoreInput");
-            const rankInput = match.querySelector(".rankInput");
-            const nameInput = match.querySelector(".nameInput");
-            if(sc !== null && scoreInput.value.trim() === "") scoreInput.value = sc;
-            if(rankInput.value === "") rankInput.value = r.rank;
-            if(nameInput.value.trim() === "") nameInput.value = canonicalPlayerName(r.name);
+            used.add(match);
+            match.querySelector(".rankInput").value = r.rank;
+            match.querySelector(".nameInput").value = canonicalPlayerName(r.name);
+            match.querySelector(".scoreInput").value = sc ?? "";
           } else {
             addPlayerRow(canonicalPlayerName(r.name), r.rank, sc ?? "");
+            used.add(document.querySelector("#playerRows tr:last-child"));
           }
         });
       }
@@ -3904,15 +3942,25 @@ function recapBuild(key){
   });
   if(streak.len >= 2) tile("streak", "LONGEST WIN STREAK", `${streak.len} wins`, `${fmtD(streak.from.date)} – ${fmtD(streak.to.date)}`);
 
+  // The season end standing (final place + trophies) closes the month, so it is the END value;
+  // the last pre-fight is only used when no season end was entered.
+  const se = out.seasonEnd || {};
   const tr = cur.filter(x => x.trophies != null);
-  if(tr.length >= 2){
-    const a = tr[0], b = tr[tr.length - 1];
-    tile("trophies", "TROPHIES", anFmtSigned(b.trophies - a.trophies), `${anFmtN(a.trophies)} → ${anFmtN(b.trophies)}`);
+  if(tr.length){
+    const a = tr[0];
+    const endT = se.trophies != null ? se.trophies : tr[tr.length - 1].trophies;
+    if(tr.length >= 2 || se.trophies != null){
+      tile("trophies", "TROPHIES", anFmtSigned(endT - a.trophies), `${anFmtN(a.trophies)} → ${anFmtN(endT)}`);
+    }
   }
   const ps = cur.filter(x => x.position != null);
-  if(ps.length >= 2){
-    const a = ps[0], b = ps[ps.length - 1];
-    tile("position", "LEAGUE POSITION", `#${a.position} → #${b.position}`, b.league ? b.league + " league" : "");
+  if(ps.length){
+    const a = ps[0], last = ps[ps.length - 1];
+    const endP = se.place != null ? se.place : last.position;
+    const endL = se.league || last.league;
+    if(ps.length >= 2 || se.place != null){
+      tile("position", "LEAGUE POSITION", `#${a.position} → #${endP}`, endL ? endL + " league" : "");
+    }
   }
 
   const mapCnt = new Map();
