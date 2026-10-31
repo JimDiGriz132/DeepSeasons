@@ -4175,3 +4175,134 @@ document.getElementById("recapModal").addEventListener("click", ev => { if(ev.ta
 document.getElementById("recapMonth").addEventListener("change", () => recapRender());
 document.getElementById("recapDownload").addEventListener("click", recapDownload);
 window.addEventListener("resize", recapFit);
+
+// =====================================================================
+// ALL CLANS RECAP — one portrait PNG with every clan: logo, final rank,
+// trophies, W / D / L and win %. Rank + trophies come from the clan's
+// season end entry that closes the chosen month; W/D/L from its fights.
+// =====================================================================
+const crOff = new Set();   // clan names the admin unticked
+let crKey = "";
+
+function crSeasonEnd(seasonEnds, key){
+  const [yy, mm] = key.split("-").map(Number), nk = mm === 12 ? `${yy + 1}-01` : `${yy}-${String(mm + 1).padStart(2, "0")}`;
+  const hit = Object.entries(seasonEnds || {})
+    .filter(([k, v]) => v && (v.place || v.trophies) && (k.slice(0, 7) === key || (k.slice(0, 7) === nk && +k.slice(8, 10) <= 3)))
+    .sort((p, q) => p[0].localeCompare(q[0])).pop();
+  if(!hit) return null;
+  return { place: parseScoreVal(hit[1].place), trophies: parseScoreVal(hit[1].trophies), league: String(hit[1].league || "").trim() };
+}
+function crMonthOptions(){
+  const seen = new Set();
+  anCollectRaw(true).forEach(x => { if(x.scored) seen.add(x.monthKey); });
+  return [...seen].sort().reverse();
+}
+function crBuild(key){
+  const all = anCollectRaw(true).filter(x => x.monthKey === key && x.scored);
+  const rows = Object.keys(clanStore.clans).map(name => {
+    const c = clanStore.clans[name] || {};
+    const fs = all.filter(x => x.clan === name);
+    const w = fs.filter(x => x.res === "WIN").length, d = fs.filter(x => x.res === "DRAW").length, l = fs.filter(x => x.res === "LOSS").length;
+    const se = crSeasonEnd(c.seasonEnds && typeof c.seasonEnds === "object" ? c.seasonEnds : {}, key) || {};
+    return { name, logo: c.logo || "", n: fs.length, w, d, l, winPct: fs.length ? w / fs.length * 100 : null,
+      place: se.place != null ? se.place : null, trophies: se.trophies != null ? se.trophies : null, league: se.league || "" };
+  }).filter(r => r.n || r.place != null || r.trophies != null);
+  rows.sort((x, y) => x.name.localeCompare(y.name));
+  return { key, name: recapMonthName(key), rows };
+}
+const CR_LEAGUE_COLORS = { warmup: "#b4bac4", novice: "#5fd0bd", bronze: "#e39a5b", silver: "#d3dce6", gold: "#ffd23f" };
+function crLeagueColor(lg){
+  const k = String(lg || "").toLowerCase().replace(/[^a-z]/g, "");
+  return CR_LEAGUE_COLORS[k] || "#e8f1ff";
+}
+function crCardHtml(data){
+  const esc = escapeHtml;
+  const rows = data.rows.filter(r => !crOff.has(r.name));
+  const list = rows.map(r => {
+    const logo = r.logo ? `<img class="cr-logo" src="${r.logo}" alt="">` : `<div class="cr-logo cr-logo-emoji">🎣</div>`;
+    const rec = r.n ? `${r.w}W · ${r.d}D · ${r.l}L` : "—";
+    const lg = r.league ? `<div class="cr-lg" style="color:${crLeagueColor(r.league)}">${esc(r.league)} league</div>` : "";
+    return `<div class="cr-row">
+      ${logo}
+      <div class="cr-name"><div class="cr-cn">${esc(r.name)}</div></div>
+      <div class="cr-col cr-col-rank"><div class="cr-cl">FINAL RANK</div><div class="cr-rk">${r.place != null ? "#" + esc(anFmtN(r.place)) : "—"}</div>${lg}</div>
+      <div class="cr-col cr-col-tr"><div class="cr-cl">TROPHIES</div><div class="cr-cv">${r.trophies != null ? esc(anFmtN(r.trophies)) + " 🏆" : "—"}</div></div>
+      <div class="cr-col cr-col-rec"><div class="cr-cl">W · D · L</div><div class="cr-cv">${rec}</div></div>
+      <div class="cr-col cr-col-pct"><div class="cr-cl">WIN %</div><div class="cr-cv cr-cv-big">${r.winPct != null ? Math.round(r.winPct) + "%" : "—"}</div></div>
+    </div>`;
+  }).join("");
+  return `<div class="rc-card cr-card">
+    <div class="cr-title">Carp Diem family recap</div>
+    <div class="cr-sub">${esc(data.name)}</div>
+    <div class="cr-list">${list}</div>
+  </div>`;
+}
+function crFit(){
+  const wrap = document.getElementById("crPreviewWrap");
+  const card = document.querySelector("#crCard .rc-card");
+  if(!wrap || !card){ if(wrap) wrap.style.height = "0px"; return; }
+  const s = wrap.clientWidth / card.offsetWidth;
+  card.style.transformOrigin = "top left";
+  card.style.transform = `scale(${s})`;
+  wrap.style.height = Math.ceil(card.offsetHeight * s) + "px";
+}
+function crRender(){
+  const key = document.getElementById("crMonth").value;
+  crKey = key;
+  const data = crBuild(key);
+  const box = document.getElementById("crToggles");
+  box.innerHTML = data.rows.map(r => `<label class="recap-toggle"><input type="checkbox" data-clan="${escapeHtml(r.name)}" ${crOff.has(r.name) ? "" : "checked"}> ${escapeHtml(r.name)}</label>`).join("");
+  box.querySelectorAll("input").forEach(cb => cb.addEventListener("change", () => {
+    if(cb.checked) crOff.delete(cb.dataset.clan); else crOff.add(cb.dataset.clan);
+    crRender();
+  }));
+  const msg = document.getElementById("crMsg"), dl = document.getElementById("crDownload"), holder = document.getElementById("crCard");
+  if(!data.rows.length || data.rows.every(r => crOff.has(r.name))){
+    msg.textContent = "No clan data in this month.";
+    holder.innerHTML = ""; dl.disabled = true; crFit(); return;
+  }
+  msg.textContent = "";
+  holder.innerHTML = crCardHtml(data);
+  dl.disabled = false;
+  crFit();
+}
+function openClansRecap(){
+  const months = crMonthOptions();
+  if(!months.length){ alert("No finished fights yet."); return; }
+  const sel = document.getElementById("crMonth");
+  sel.innerHTML = months.map(k => `<option value="${k}">${recapMonthName(k)}</option>`).join("");
+  const wanted = `${tableYear}-${String(tableMonth + 1).padStart(2, "0")}`;
+  sel.value = months.includes(wanted) ? wanted : months[0];
+  document.getElementById("clansRecapModal").classList.remove("hidden");
+  crRender();
+}
+async function crDownload(){
+  const src = document.querySelector("#crCard .rc-card");
+  if(!src) return;
+  const btn = document.getElementById("crDownload");
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = "Rendering…";
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-20000px;top:0;";
+  const clone = src.cloneNode(true);
+  clone.style.transform = "none";
+  host.appendChild(clone);
+  document.body.appendChild(host);
+  try{
+    const canvas = await html2canvas(clone, { backgroundColor: null, scale: 1, useCORS: true });
+    const link = document.createElement("a");
+    link.download = `all-clans-recap-${crKey}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  }catch(err){
+    alert("PNG export failed: " + err.message);
+  }finally{
+    host.remove(); btn.textContent = label; btn.disabled = false;
+  }
+}
+document.getElementById("clansRecapBtn").addEventListener("click", openClansRecap);
+document.getElementById("crClose").addEventListener("click", () => document.getElementById("clansRecapModal").classList.add("hidden"));
+document.getElementById("clansRecapModal").addEventListener("click", ev => { if(ev.target.id === "clansRecapModal") ev.currentTarget.classList.add("hidden"); });
+document.getElementById("crMonth").addEventListener("change", () => crRender());
+document.getElementById("crDownload").addEventListener("click", crDownload);
+window.addEventListener("resize", crFit);

@@ -423,13 +423,34 @@ body:not(.is-admin) .admin-only{display:none !important;}
 .rc-awho-xs{font-size:36px;line-height:1.25;}
 .rc-adesc{font-size:30px;color:#cfeedd;margin-top:6px;}
 .rc-foot{text-align:center;font-size:34px;font-weight:600;color:#9be7bd;margin-top:36px;}
+
+/* ===== All clans recap (own look: navy background, wider card) ===== */
+.cr-card{width:1640px;background:linear-gradient(165deg,#0e1a38 0%,#18305f 55%,#23467e 100%);}
+.cr-title{font-size:84px;font-weight:900;line-height:1.05;}
+.cr-sub{font-size:42px;font-weight:600;color:#8fc7ff;margin-top:10px;}
+.cr-list{margin-top:36px;margin-bottom:8px;display:flex;flex-direction:column;gap:18px;}
+.cr-row{display:flex;align-items:center;gap:28px;padding:22px 32px;border-radius:28px;background:rgba(255,255,255,.08);border:2px solid rgba(255,255,255,.16);}
+.cr-logo{width:120px;height:120px;border-radius:50%;border:6px solid #fff;object-fit:cover;flex:none;background:#fff;}
+.cr-logo-emoji{display:flex;align-items:center;justify-content:center;font-size:62px;background:#23467e;}
+.cr-name{flex:1;min-width:0;}
+.cr-cn{font-size:46px;font-weight:900;line-height:1.1;overflow-wrap:break-word;}
+.cr-col{flex:none;text-align:center;}
+.cr-col-rank{width:230px;}
+.cr-col-tr{width:190px;}
+.cr-col-rec{width:290px;}
+.cr-col-pct{width:150px;}
+.cr-cl{font-size:20px;font-weight:800;letter-spacing:.08em;color:#8fc7ff;}
+.cr-rk{font-size:62px;font-weight:900;line-height:1.05;margin-top:2px;}
+.cr-lg{font-size:28px;font-weight:800;line-height:1.1;margin-top:2px;white-space:nowrap;}
+.cr-cv{font-size:42px;font-weight:900;line-height:1.1;margin-top:4px;white-space:nowrap;}
+.cr-cv-big{font-size:54px;}
 /* Month recap on phones: use (almost) the full screen width for the picture */
 @media (max-width:640px){
-  #recapModal{padding:8px 4px;}
+  #recapModal,#clansRecapModal{padding:8px 4px;}
   .recap-modal .modal-head{padding:12px 12px;}
   .recap-modal .modal-body{padding:8px 4px;}
   .recap-modal .modal-foot{padding:12px 12px;gap:8px;align-items:center;}
-  .recap-modal .recap-month-pick,.recap-modal .recap-toggles,.recap-modal .recap-pickers,.recap-modal #recapMsg{margin-left:8px;margin-right:8px;}
+  .recap-modal .recap-month-pick,.recap-modal .recap-toggles,.recap-modal #crMsg,.recap-modal .recap-pickers,.recap-modal #recapMsg{margin-left:8px;margin-right:8px;}
   .recap-preview-wrap{border-radius:8px;margin:8px 0;}
 }
 /* Records by season (OOS) */

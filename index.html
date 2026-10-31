@@ -49,6 +49,7 @@
       <button id="nextMonthTable">Next Month ›</button>
       <button id="exportBtn" class="admin-only">Export JSON</button>
       <button id="recapBtn" class="admin-only">📸 Month recap</button>
+      <button id="clansRecapBtn" class="admin-only">🏆 All clans recap</button>
       <label class="import-label admin-only">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label>
     </div>
     <div id="tablesContainer" class="centered-table-container"></div>
@@ -359,6 +360,26 @@
     <div class="modal-foot">
       <span class="hint-inline">Untick anything you don't want on the picture.</span>
       <button id="recapDownload" class="primary" type="button">⬇ Download PNG</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== ALL CLANS RECAP (PNG) ===================== -->
+<div id="clansRecapModal" class="modal-backdrop hidden">
+  <div class="modal recap-modal">
+    <div class="modal-head">
+      <h2>🏆 All clans recap</h2>
+      <button id="crClose" class="close-btn" type="button">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="recap-month-pick">Month <select id="crMonth"></select></label>
+      <div id="crToggles" class="recap-toggles"></div>
+      <p id="crMsg" class="hint" style="text-align:left"></p>
+      <div id="crPreviewWrap" class="recap-preview-wrap"><div id="crCard"></div></div>
+    </div>
+    <div class="modal-foot">
+      <span class="hint-inline">Untick any clan you don't want on the picture.</span>
+      <button id="crDownload" class="primary" type="button">⬇ Download PNG</button>
     </div>
   </div>
 </div>
