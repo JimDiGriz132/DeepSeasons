@@ -1723,6 +1723,7 @@ function openEditor(y, m, d){
   document.getElementById("oppLeague").value = editorFight.oppLeague || "Warm-up";
   document.getElementById("ourFinalScore").value = editorFight.ourFinalScore ?? "";
   document.getElementById("theirFinalScore").value = editorFight.theirFinalScore ?? "";
+  document.getElementById("manualResult").value = editorFight.result || "";
   
   document.getElementById("mapName").value = titleCase(editorFight.mapName);
   for(let i=1;i<=4;i++) document.getElementById("fish"+i).value = titleCase((editorFight.fishSet || [])[i-1]);
@@ -1781,16 +1782,19 @@ function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 }
 
-["ourFinalScore","theirFinalScore"].forEach(id=>{
+["ourFinalScore","theirFinalScore","manualResult"].forEach(id=>{
   document.getElementById(id).addEventListener("input", updateResultPreview);
+  document.getElementById(id).addEventListener("change", updateResultPreview);
 });
 function updateResultPreview(){
   const our = document.getElementById("ourFinalScore").value;
   const their = document.getElementById("theirFinalScore").value;
   const el = document.getElementById("resultPreview");
-  if(our==="" || their===""){
-    el.textContent = "—";
-    el.className = "badge";
+  const manual = document.getElementById("manualResult").value;
+  if(our==="" || their==="" || parseScoreVal(our) == null || parseScoreVal(their) == null){
+    // no readable scores -> fall back to the manually picked result
+    el.textContent = manual || "—";
+    el.className = "badge" + (manual ? " " + manual.toLowerCase() : "");
   } else {
     const o = parseScoreVal(our), t = parseScoreVal(their);
     if(o == null || t == null){
@@ -1879,6 +1883,9 @@ document.getElementById("saveFightBtn").addEventListener("click", async ()=>{
     playerRanks: {},
     playerScores: {}
   };
+  // manual result: only stored when there are no usable scores (scores always win in computeResult)
+  const manualRes = document.getElementById("manualResult").value;
+  if(manualRes && (parseScoreVal(fight.ourFinalScore) == null || parseScoreVal(fight.theirFinalScore) == null)) fight.result = manualRes;
   Object.assign(fight, readMapSetFromInputs()); // mapName + fishSet
   const playersAfter = [...state.players];
   document.querySelectorAll("#playerRows tr").forEach(tr=>{

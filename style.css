@@ -526,3 +526,5 @@ body:not(.is-admin) .admin-only{display:none !important;}
   .an-filters label:nth-child(3){grid-column:1 / -1;}
   .an-filters .an-check{grid-column:1 / -1;justify-content:center;}
 }
+.manual-result{margin-left:14px;font-weight:400;font-size:.85rem;}
+.manual-result select{margin-left:6px;}

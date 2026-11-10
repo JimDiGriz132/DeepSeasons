@@ -291,7 +291,16 @@
             <label>Their Final Score <input type="text" inputmode="numeric" id="theirFinalScore"></label>
           </div>
         </div>
-        <div class="result-preview">Result: <span id="resultPreview" class="badge">—</span></div>
+        <div class="result-preview">Result: <span id="resultPreview" class="badge">—</span>
+          <label class="manual-result">Manual result:
+            <select id="manualResult">
+              <option value="">— auto (from scores) —</option>
+              <option value="WIN">WIN</option>
+              <option value="LOSS">LOSS</option>
+              <option value="DRAW">DRAW</option>
+            </select>
+          </label>
+        </div>
 
         <h4>Players (Rank in this fight)</h4>
         <table class="editor-players-table">
