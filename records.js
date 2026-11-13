@@ -53,6 +53,8 @@
     mapNames: () => DATA ? [...DATA.maps.values()] : [],
     fishNames: () => DATA ? DATA.fishes.map(f => f.name) : [],
     // exact (case/punctuation-insensitive) match only -> official English spelling, or ""
+    // "common" | "rare" | "epic" (fish without a rarity tag, or unknown fish, are common)
+    rarityOf: name => info(name).rarity,
     canonFish: name => { const f = DATA && DATA.byNorm.get(norm(name)); return f ? f.name : ""; },
     // fish names that exist on the given map (empty list if the map is unknown)
     fishForMap: mapName => {

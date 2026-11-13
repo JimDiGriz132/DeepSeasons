@@ -528,3 +528,6 @@ body:not(.is-admin) .admin-only{display:none !important;}
 }
 .manual-result{margin-left:14px;font-weight:400;font-size:.85rem;}
 .manual-result select{margin-left:6px;}
+
+/* participation check: small red "!" next to a player's score (admin only) */
+.part-warn{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;margin-left:6px;border-radius:50%;background:#d93025;color:#fff;font-size:.72rem;font-weight:800;line-height:1;cursor:help;vertical-align:middle;}

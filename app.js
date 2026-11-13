@@ -1761,6 +1761,7 @@ function renderPlayerRows(){
   const scores = editorFight.playerScores || {};
   entries.forEach(([name, rank])=> addPlayerRow(name, rank, scores[name] ?? ""));
   updateScoreCheck();
+  updateParticipationMarks();
 }
 function addPlayerRow(name="", rank="", score=""){
   const tbody = document.getElementById("playerRows");
@@ -1771,11 +1772,13 @@ function addPlayerRow(name="", rank="", score=""){
     <td><input type="text" inputmode="numeric" class="scoreInput" value="${score}" placeholder="score"></td>
     <td><button class="row-del" title="Delete row">✕</button></td>
   `;
-  tr.querySelector(".row-del").addEventListener("click", ()=>{ tr.remove(); updateScoreCheck(); });
+  tr.querySelector(".row-del").addEventListener("click", ()=>{ tr.remove(); updateScoreCheck(); updateParticipationMarks(); });
   tbody.appendChild(tr);
   updateScoreCheck();
+  updateParticipationMarks();
 }
-document.getElementById("playerRows").addEventListener("input", updateScoreCheck);
+document.getElementById("playerRows").addEventListener("input", ()=>{ updateScoreCheck(); updateParticipationMarks(); });
+[1,2,3,4].forEach(i => { const el = document.getElementById("fish"+i); if(el) el.addEventListener("input", updateParticipationMarks); });
 document.getElementById("addPlayerRow").addEventListener("click", ()=> addPlayerRow());
 
 function escapeHtml(s){
@@ -2960,6 +2963,57 @@ function anTable(el, id, cols, rows, defKey, defDir, onRow){
   }));
 }
 
+// ---------------------------------------------------------
+// PARTICIPATION CHECK (admin only)
+// A player who did not catch all 4 fish of the set cannot have reached the
+// minimum score: 300 per common, 400 per rare, 500 per epic fish.
+// ---------------------------------------------------------
+const PART_MIN_PER_FISH = { common: 300, rare: 400, epic: 500 };
+function setMinScore(f){
+  const C = window.FishCatalog;
+  const fish = ((f && f.fishSet) || []).map(titleCase).filter(Boolean);
+  if(!fish.length || !C || !C.ready()) return null; // set unknown -> cannot check
+  return fish.reduce((sum, n) => sum + (PART_MIN_PER_FISH[C.rarityOf(n)] || PART_MIN_PER_FISH.common), 0);
+}
+// -> { min, score } when the player is below the minimum, otherwise null
+function participationFlag(f, player){
+  if(!f) return null;
+  const min = setMinScore(f);
+  const score = parseScoreVal((f.playerScores || {})[player]);
+  if(min == null || score == null) return null;
+  return score < min ? { min, score } : null;
+}
+// how many flagged fights the player has in the month of `key`, up to and including that fight
+function participationMonthCount(fights, key, player){
+  const ym = key.slice(0, 7);
+  return Object.keys(fights || {}).filter(k => k.slice(0, 7) === ym && k <= key && participationFlag(fights[k], player)).length;
+}
+
+// Editor: live red "!" next to each player's score input (admin only), based on the
+// fish currently typed in the editor and the scores currently typed in the rows.
+function updateParticipationMarks(){
+  const rows = Array.from(document.querySelectorAll("#playerRows tr"));
+  rows.forEach(tr => { const old = tr.querySelector(".part-warn"); if(old) old.remove(); });
+  if(!isAdmin || !editorKey) return;
+  const fishSet = [1,2,3,4].map(i => titleCase((document.getElementById("fish"+i) || {}).value)).filter(Boolean);
+  const cur = { fishSet, playerScores: {} };
+  rows.forEach(tr => { const n = tr.querySelector(".nameInput").value.trim(); if(n) cur.playerScores[n] = tr.querySelector(".scoreInput").value; });
+  const ym = editorKey.slice(0, 7);
+  rows.forEach(tr => {
+    const name = tr.querySelector(".nameInput").value.trim();
+    const flag = name ? participationFlag(cur, name) : null;
+    if(!flag) return;
+    const earlier = Object.keys(state.fights || {}).filter(k => k.slice(0, 7) === ym && k < editorKey && participationFlag(state.fights[k], name)).length;
+    const tip = `Incomplete set: scored ${anFmtN(flag.score)}, minimum for this set is ${anFmtN(flag.min)} (300 per common, 400 per rare, 500 per epic fish). ` +
+      `Flagged ${earlier + 1}× this month (incl. this fight).`;
+    const span = document.createElement("span");
+    span.className = "part-warn admin-only";
+    span.title = tip;
+    span.textContent = "!";
+    tr.querySelector(".scoreInput").parentElement.appendChild(span);
+  });
+}
+
 // open the day editor for a fight date (used by clickable dates in Analytics)
 function anOpenFight(date, clan){
   if(!(date instanceof Date) || isNaN(date)) return;
@@ -2993,9 +3047,17 @@ function anOpenFight(date, clan){
   const entries = Object.entries(ranks).sort((a, b) => (Number(a[1]) || 999) - (Number(b[1]) || 999));
   const board = entries.length
     ? `<div class="fv-section"><h4>Scoreboard</h4><table class="fv-table"><thead><tr><th>Rank</th><th>Player</th><th>Score</th></tr></thead><tbody>` +
-      entries.map(([name, rank]) =>
-        `<tr class="${Number(rank) <= SCORE_COUNTING_PLAYERS ? "fv-top" : ""}"><td>${escapeHtml(String(rank))}</td><td class="left">${escapeHtml(name)}</td><td>${scores[name] == null ? "—" : num(scores[name])}</td></tr>`
-      ).join("") + `</tbody></table><p class="hint" style="text-align:left">Bold rows = top ${SCORE_COUNTING_PLAYERS}, the players that count towards the clan score.</p></div>`
+      entries.map(([name, rank]) => {
+        let warn = "";
+        const flag = isAdmin ? participationFlag(f, name) : null; // admin only
+        if(flag){
+          const cnt = participationMonthCount(fightsOf, dateKey(y, m, d), name);
+          const tip = `Incomplete set: scored ${anFmtN(flag.score)}, minimum for this set is ${anFmtN(flag.min)} (300 per common, 400 per rare, 500 per epic fish). ` +
+            `Flagged ${cnt}× this month (incl. this fight).`;
+          warn = ` <span class="part-warn admin-only" title="${escapeHtml(tip)}">!</span>`;
+        }
+        return `<tr class="${Number(rank) <= SCORE_COUNTING_PLAYERS ? "fv-top" : ""}"><td>${escapeHtml(String(rank))}</td><td class="left">${escapeHtml(name)}</td><td>${scores[name] == null ? "—" : num(scores[name])}${warn}</td></tr>`;
+      }).join("") + `</tbody></table><p class="hint" style="text-align:left">Bold rows = top ${SCORE_COUNTING_PLAYERS}, the players that count towards the clan score.</p></div>`
     : '<div class="fv-section"><h4>Scoreboard</h4><p class="hint" style="text-align:left">No scoreboard saved for this day.</p></div>';
 
   document.getElementById("fvTitle").textContent = `${d}. ${MONTHS[m]} ${y}.`;
