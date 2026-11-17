@@ -3024,25 +3024,42 @@ function participationMonthCount(fights, key, player){
 // either for one month or since the player's first fight (all time).
 // ---------------------------------------------------------
 let incMode = "month";
+let incSortKey = "incomplete";   // name | incomplete | absent | fought | pctAbsent | pctIncomplete
+let incSortDir = "desc";
 let incYear = today.getFullYear();
 let incMonth = today.getMonth();
 
 function incompleteStats(ym){ // ym = "YYYY-MM" or null for all time
+  const fightKeys = getPlayerFightKeys();                    // player -> sorted keys of fights he fought
   const stats = {};
+  const get = name => stats[name] || (stats[name] = { name, incomplete: 0, absent: 0, fought: 0, incDates: [], absDates: [] });
   Object.keys(state.fights || {}).sort().forEach(k => {
     if(ym && k.slice(0, 7) !== ym) return;
     const f = state.fights[k];
-    if(!f || setMinScore(f) == null) return;                  // set unknown -> cannot check
-    const scores = f.playerScores || {};
-    Object.keys(scores).forEach(name => {
-      if(parseScoreVal(scores[name]) == null) return;         // no score entered -> not counted
-      const s = stats[name] || (stats[name] = { name, flagged: 0, fights: 0, first: k, dates: [] });
-      s.fights++;
-      if(participationFlag(f, name)){ s.flagged++; s.dates.push(k); }
+    const ranks = (f && f.playerRanks) || {};
+    if(!Object.keys(ranks).length) return;                    // nobody entered -> fight not counted
+    const names = new Set([...(state.players || []), ...Object.keys(ranks)]);
+    names.forEach(p => {
+      if(Object.prototype.hasOwnProperty.call(ranks, p)){
+        const s = get(p);
+        s.fought++;
+        if(participationFlag(f, p)){ s.incomplete++; s.incDates.push(k); }
+        return;
+      }
+      // not in this fight: absent only if he was a clan member at that time
+      const keys = fightKeys[p];
+      if(!keys || !keys.length || k < keys[0]) return;                       // not yet seen
+      if(hasLeft(p) && k > keys[keys.length - 1]) return;                    // left after his last fight
+      let prev = null, next = null;
+      for(const x of keys){ if(x < k) prev = x; else if(x > k){ next = x; break; } }
+      if(prev && next && keyToDays(next) - keyToDays(prev) >= AWAY_GAP_DAYS) return; // away, came back later
+      const s = get(p);
+      s.absent++; s.absDates.push(k);
     });
   });
-  return Object.values(stats).filter(s => s.flagged > 0)
-    .sort((x, y) => y.flagged - x.flagged || (y.flagged / y.fights) - (x.flagged / x.fights) || x.name.localeCompare(y.name));
+  return Object.values(stats)
+    .filter(s => s.incomplete > 0 || s.absent > 0)           // hide players with nothing to report
+    .sort((x, y) => y.incomplete - x.incomplete || y.absent - x.absent || x.name.localeCompare(y.name));
 }
 
 function renderIncomplete(){
@@ -3055,22 +3072,47 @@ function renderIncomplete(){
   const rows = incompleteStats(ym);
   const body = document.getElementById("incBody");
   if(!rows.length){
-    body.innerHTML = `<p class="hint" style="text-align:left">No incomplete sets ${monthMode ? "in this month" : "recorded"}. 🎉</p>`;
+    body.innerHTML = `<p class="hint" style="text-align:left">No incomplete sets or absences ${monthMode ? "in this month" : "recorded"}. 🎉</p>`;
     return;
   }
   const dFmt = k => `${Number(k.slice(8, 10))}.${Number(k.slice(5, 7))}.`;
+  const pct = (n, d) => d ? `${Math.round(100 * n / d)}%` : "–";
+  const val = {
+    name: r => r.name.toLowerCase(),
+    incomplete: r => r.incomplete,
+    absent: r => r.absent,
+    fought: r => r.fought,
+    pctAbsent: r => (r.fought + r.absent) ? r.absent / (r.fought + r.absent) : -1,
+    pctIncomplete: r => r.fought ? r.incomplete / r.fought : -1
+  }[incSortKey];
+  const dir = incSortDir === "asc" ? 1 : -1;
+  // rows arrive in default order (incomplete desc, absent desc, name); Array.sort is stable, so ties keep it
+  rows.sort((x, y) => {
+    const a = val(x), b = val(y);
+    return (a < b ? -1 : a > b ? 1 : 0) * dir;
+  });
+  const th = (key, label, cls = "") => {
+    const arrow = incSortKey === key ? (incSortDir === "asc" ? " ▲" : " ▼") : "";
+    return `<th class="sortable ${cls}" data-sort="${key}">${label}${arrow}</th>`;
+  };
   body.innerHTML = `<table class="inc-table"><thead><tr>
-      <th>#</th><th class="left">Player</th><th>Incomplete</th><th>Fights</th><th>%</th>${monthMode ? '<th class="left">Dates</th>' : '<th>First fight</th>'}
+      ${th("name", "Player", "left")}${th("incomplete", "Incomplete")}${th("absent", "Absent")}${th("fought", "Fought")}${th("pctAbsent", "% absent")}${th("pctIncomplete", "% incomplete")}
     </tr></thead><tbody>` +
-    rows.map((r, i) => `<tr class="${hasLeft(r.name) ? "inc-left" : ""}">
-      <td>${i + 1}</td>
+    rows.map(r => `<tr class="${hasLeft(r.name) ? "inc-left" : ""}">
       <td class="left">${escapeHtml(r.name)}${hasLeft(r.name) ? ' <span class="hint-inline">(left)</span>' : ""}</td>
-      <td class="inc-n">${r.flagged}</td>
-      <td>${r.fights}</td>
-      <td>${Math.round(100 * r.flagged / r.fights)}%</td>
-      ${monthMode ? `<td class="left">${r.dates.map(dFmt).join(", ")}</td>` : `<td>${dFmt(r.first)}${r.first.slice(0, 4)}.</td>`}
+      <td class="inc-n" title="${r.incDates.map(dFmt).join(", ")}">${r.incomplete}</td>
+      <td class="inc-abs" title="${r.absDates.map(dFmt).join(", ")}">${r.absent}</td>
+      <td>${r.fought}</td>
+      <td>${pct(r.absent, r.fought + r.absent)}</td>
+      <td>${pct(r.incomplete, r.fought)}</td>
     </tr>`).join("") + `</tbody></table>
-    <p class="hint" style="text-align:left">Fights = fights with a saved score for that player where the set is known. Incomplete = score below the set minimum (300 common / 400 rare / 500 epic per fish).</p>`;
+    <p class="hint" style="text-align:left"><b>Fought</b> = fights with a placement. <b>Absent</b> = fights he missed while in the clan (not counted after leaving or during a 30+ day away period). <b>% absent</b> = absent / (fought + absent). <b>% incomplete</b> = incomplete / fought (score below the set minimum: 300 common / 400 rare / 500 epic per fish). Click a column header to sort, hover a number to see the dates.</p>`;
+  body.querySelectorAll("th[data-sort]").forEach(h => h.addEventListener("click", () => {
+    const key = h.dataset.sort;
+    if(incSortKey === key) incSortDir = incSortDir === "asc" ? "desc" : "asc";
+    else { incSortKey = key; incSortDir = key === "name" ? "asc" : "desc"; }
+    renderIncomplete();
+  }));
 }
 
 function openIncomplete(){
