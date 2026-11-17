@@ -50,6 +50,7 @@
       <button id="exportBtn" class="admin-only">Export JSON</button>
       <button id="recapBtn" class="admin-only">📸 Month recap</button>
       <button id="clansRecapBtn" class="admin-only">🏆 All clans recap</button>
+      <button id="incompleteBtn" class="admin-only">❗ Incomplete sets</button>
       <label class="import-label admin-only">Import JSON<input type="file" id="importFile" accept="application/json" hidden></label>
     </div>
     <div id="tablesContainer" class="centered-table-container"></div>
@@ -369,6 +370,30 @@
     <div class="modal-foot">
       <span class="hint-inline">Untick anything you don't want on the picture.</span>
       <button id="recapDownload" class="primary" type="button">⬇ Download PNG</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== INCOMPLETE SETS LIST ===================== -->
+<div id="incompleteModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>❗ Incomplete sets</h2>
+      <button id="incompleteClose" class="close-btn" type="button">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="inc-controls">
+        <div class="inc-switch" role="group" aria-label="Period">
+          <button type="button" id="incModeMonth" class="active">Month</button>
+          <button type="button" id="incModeAll">All time</button>
+        </div>
+        <span id="incMonthNav" class="inc-month-nav">
+          <button type="button" id="incPrev" class="secondary">‹</button>
+          <b id="incMonthLabel"></b>
+          <button type="button" id="incNext" class="secondary">›</button>
+        </span>
+      </div>
+      <div id="incBody"></div>
     </div>
   </div>
 </div>

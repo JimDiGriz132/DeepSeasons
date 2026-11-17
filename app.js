@@ -999,6 +999,32 @@ function getPlayerFirstSeen(){
   return first;
 }
 
+// Players who rotate between clans (or take a long break) and later come back:
+// a block where the player has no fight is NOT shown as an all-"-" row if it lies
+// inside a finished absence, i.e. he played before the block AND again after it,
+// and the gap between those two fights is at least AWAY_GAP_DAYS. So when he
+// returns you only un-tick "Left clan" and the old months stay clean.
+const AWAY_GAP_DAYS = 30;
+function getPlayerFightKeys(){
+  const map = {};
+  Object.keys(state.fights).sort().forEach(key=>{
+    const f = state.fights[key];
+    if(!f || !f.playerRanks) return;
+    Object.keys(f.playerRanks).forEach(p=>{ (map[p] || (map[p] = [])).push(key); });
+  });
+  return map;
+}
+function keyToDays(k){ const [y,m,d] = k.split("-").map(Number); return Math.round(Date.UTC(y, m-1, d) / 86400000); }
+function isAwayInBlock(keys, blockFirstKey, blockLastKey){
+  if(!keys || !keys.length) return false;
+  let prev = null, next = null;
+  for(const k of keys){
+    if(k < blockFirstKey) prev = k;
+    else if(k > blockLastKey){ next = k; break; }
+  }
+  return !!(prev && next && keyToDays(next) - keyToDays(prev) >= AWAY_GAP_DAYS);
+}
+
 function buildTableBlock(container, title, days){
   const wrap = document.createElement("div");
   wrap.className = "table-block-wrap";
@@ -1075,15 +1101,19 @@ function buildTableBlock(container, title, days){
 
   // A player only gets a row from the block in which they first appeared onward
   // (never in earlier blocks). Players who left the clan additionally lose the
-  // row in blocks where they didn't play. Players who have never played get a
+  // row in blocks where they didn't play, and so do players who were away for 30+ days
+  // and came back (see isAwayInBlock). Players who have never played get a
   // row only in the most recent block.
   const playedHere = player => fights.some(f => f.playerRanks && Object.prototype.hasOwnProperty.call(f.playerRanks, player));
   const firstSeen = getPlayerFirstSeen();
+  const fightKeys = getPlayerFightKeys();
+  const blockFirstKey = dayKeys[0];
   const blockLastKey = dayKeys[dayKeys.length - 1];
   const latestKey = Object.keys(state.fights).sort().pop() || "";
   const sortedPlayers = [...state.players]
     .filter(p => {
       if(playedHere(p)) return true;
+      if(isAwayInBlock(fightKeys[p], blockFirstKey, blockLastKey)) return false; // came back later
       if(hasLeft(p)) return false;
       const first = firstSeen[p];
       return first ? first <= blockLastKey : blockLastKey >= latestKey;
@@ -2988,6 +3018,80 @@ function participationMonthCount(fights, key, player){
   const ym = key.slice(0, 7);
   return Object.keys(fights || {}).filter(k => k.slice(0, 7) === ym && k <= key && participationFlag(fights[k], player)).length;
 }
+
+// ---------------------------------------------------------
+// INCOMPLETE SETS LIST (admin only): players ranked by number of flagged fights,
+// either for one month or since the player's first fight (all time).
+// ---------------------------------------------------------
+let incMode = "month";
+let incYear = today.getFullYear();
+let incMonth = today.getMonth();
+
+function incompleteStats(ym){ // ym = "YYYY-MM" or null for all time
+  const stats = {};
+  Object.keys(state.fights || {}).sort().forEach(k => {
+    if(ym && k.slice(0, 7) !== ym) return;
+    const f = state.fights[k];
+    if(!f || setMinScore(f) == null) return;                  // set unknown -> cannot check
+    const scores = f.playerScores || {};
+    Object.keys(scores).forEach(name => {
+      if(parseScoreVal(scores[name]) == null) return;         // no score entered -> not counted
+      const s = stats[name] || (stats[name] = { name, flagged: 0, fights: 0, first: k, dates: [] });
+      s.fights++;
+      if(participationFlag(f, name)){ s.flagged++; s.dates.push(k); }
+    });
+  });
+  return Object.values(stats).filter(s => s.flagged > 0)
+    .sort((x, y) => y.flagged - x.flagged || (y.flagged / y.fights) - (x.flagged / x.fights) || x.name.localeCompare(y.name));
+}
+
+function renderIncomplete(){
+  const monthMode = incMode === "month";
+  document.getElementById("incModeMonth").classList.toggle("active", monthMode);
+  document.getElementById("incModeAll").classList.toggle("active", !monthMode);
+  document.getElementById("incMonthNav").classList.toggle("hidden", !monthMode);
+  document.getElementById("incMonthLabel").textContent = `${MONTHS[incMonth]} ${incYear}.`;
+  const ym = monthMode ? `${incYear}-${String(incMonth + 1).padStart(2, "0")}` : null;
+  const rows = incompleteStats(ym);
+  const body = document.getElementById("incBody");
+  if(!rows.length){
+    body.innerHTML = `<p class="hint" style="text-align:left">No incomplete sets ${monthMode ? "in this month" : "recorded"}. 🎉</p>`;
+    return;
+  }
+  const dFmt = k => `${Number(k.slice(8, 10))}.${Number(k.slice(5, 7))}.`;
+  body.innerHTML = `<table class="inc-table"><thead><tr>
+      <th>#</th><th class="left">Player</th><th>Incomplete</th><th>Fights</th><th>%</th>${monthMode ? '<th class="left">Dates</th>' : '<th>First fight</th>'}
+    </tr></thead><tbody>` +
+    rows.map((r, i) => `<tr class="${hasLeft(r.name) ? "inc-left" : ""}">
+      <td>${i + 1}</td>
+      <td class="left">${escapeHtml(r.name)}${hasLeft(r.name) ? ' <span class="hint-inline">(left)</span>' : ""}</td>
+      <td class="inc-n">${r.flagged}</td>
+      <td>${r.fights}</td>
+      <td>${Math.round(100 * r.flagged / r.fights)}%</td>
+      ${monthMode ? `<td class="left">${r.dates.map(dFmt).join(", ")}</td>` : `<td>${dFmt(r.first)}${r.first.slice(0, 4)}.</td>`}
+    </tr>`).join("") + `</tbody></table>
+    <p class="hint" style="text-align:left">Fights = fights with a saved score for that player where the set is known. Incomplete = score below the set minimum (300 common / 400 rare / 500 epic per fish).</p>`;
+}
+
+function openIncomplete(){
+  if(!isAdmin) return;
+  incYear = tableYear; incMonth = tableMonth;
+  document.getElementById("incompleteModal").classList.remove("hidden");
+  renderIncomplete();
+}
+function incShiftMonth(d){
+  incMonth += d;
+  if(incMonth < 0){ incMonth = 11; incYear--; }
+  if(incMonth > 11){ incMonth = 0; incYear++; }
+  renderIncomplete();
+}
+document.getElementById("incompleteBtn").addEventListener("click", openIncomplete);
+document.getElementById("incompleteClose").addEventListener("click", () => document.getElementById("incompleteModal").classList.add("hidden"));
+document.getElementById("incompleteModal").addEventListener("click", ev => { if(ev.target.id === "incompleteModal") ev.currentTarget.classList.add("hidden"); });
+document.getElementById("incModeMonth").addEventListener("click", () => { incMode = "month"; renderIncomplete(); });
+document.getElementById("incModeAll").addEventListener("click", () => { incMode = "all"; renderIncomplete(); });
+document.getElementById("incPrev").addEventListener("click", () => incShiftMonth(-1));
+document.getElementById("incNext").addEventListener("click", () => incShiftMonth(1));
 
 // Editor: live red "!" next to each player's score input (admin only), based on the
 // fish currently typed in the editor and the scores currently typed in the rows.

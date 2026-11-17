@@ -531,3 +531,15 @@ body:not(.is-admin) .admin-only{display:none !important;}
 
 /* participation check: small red "!" next to a player's score (admin only) */
 .part-warn{display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;margin-left:6px;border-radius:50%;background:#d93025;color:#fff;font-size:.72rem;font-weight:800;line-height:1;cursor:help;vertical-align:middle;}
+/* Incomplete sets list */
+.inc-controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:12px 0;}
+.inc-switch{display:inline-flex;border:1px solid var(--border);border-radius:999px;overflow:hidden;}
+.inc-switch button{border:none;background:#fff;padding:7px 16px;font-weight:700;cursor:pointer;color:var(--gray);}
+.inc-switch button.active{background:#d93025;color:#fff;}
+.inc-month-nav{display:inline-flex;align-items:center;gap:8px;}
+.inc-month-nav.hidden{display:none;}
+.inc-table{width:100%;border-collapse:collapse;margin-bottom:12px;}
+.inc-table th,.inc-table td{padding:7px 10px;border-bottom:1px solid var(--border);text-align:center;}
+.inc-table th.left,.inc-table td.left{text-align:left;}
+.inc-table tr.inc-left td{color:var(--gray);}
+.inc-table .inc-n{font-weight:800;color:#d93025;}
